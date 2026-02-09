@@ -6,7 +6,11 @@ class CallScreen extends StatefulWidget {
   final String callId;
   final bool isCaller;
 
-  const CallScreen({super.key, required this.callId, required this.isCaller});
+  const CallScreen({
+    super.key,
+    required this.callId,
+    required this.isCaller,
+  });
 
   @override
   State<CallScreen> createState() => _CallScreenState();
@@ -19,8 +23,8 @@ class _CallScreenState extends State<CallScreen> {
   void initState() {
     super.initState();
 
-    // 🔊 Speaker ON (flutter_webrtc 1.3.0 safe)
-    Helper.setSpeakerphoneOn(true);
+    // ✅ EARPIECE MODE (MOST RELIABLE)
+    Helper.setAudioFocus();
 
     call.start(widget.callId, widget.isCaller);
   }
