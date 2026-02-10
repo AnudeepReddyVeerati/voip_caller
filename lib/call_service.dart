@@ -3,26 +3,40 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'app_error.dart';
 
 class CallService {
   final _firestore = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
 
   String get uid => _auth.currentUser!.uid;
+  String? get email => _auth.currentUser!.email;
+
+  Future<T> _guardFirestore<T>(Future<T> Function() action) async {
+    try {
+      return await action();
+    } on FirebaseException catch (e) {
+      throw mapFirestoreException(e);
+    }
+  }
 
   Future<void> setUserOnline() async {
-    await _firestore.collection("users").doc(uid).set({
-      "uid": uid,
-      "email": _auth.currentUser!.email,
-      "isOnline": true,
-      "lastSeen": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    await _guardFirestore(() {
+      return _firestore.collection("users").doc(uid).set({
+        "uid": uid,
+        "email": _auth.currentUser!.email,
+        "isOnline": true,
+        "lastSeen": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    });
   }
 
   Future<void> setUserOffline() async {
-    await _firestore.collection("users").doc(uid).update({
-      "isOnline": false,
-      "lastSeen": FieldValue.serverTimestamp(),
+    await _guardFirestore(() {
+      return _firestore.collection("users").doc(uid).update({
+        "isOnline": false,
+        "lastSeen": FieldValue.serverTimestamp(),
+      });
     });
   }
 
@@ -35,17 +49,25 @@ class CallService {
 
   String _callId() => Random().nextInt(999999).toString();
 
-  Future<String> createCall(String receiverId, String receiverEmail) async {
-    final callId = _callId();
-    await _firestore.collection("calls").doc(callId).set({
-      "callId": callId,
-      "callerId": uid,
-      "callerEmail": _auth.currentUser!.email,
-      "receiverId": receiverId,
-      "receiverEmail": receiverEmail,
-      "status": "calling",
+  Future<String> createCall(
+    String receiverId,
+    String receiverEmail, {
+    String? callbackId,
+  }) async {
+    return _guardFirestore(() async {
+      final callId = _callId();
+      await _firestore.collection("calls").doc(callId).set({
+        "callId": callId,
+        "callerId": uid,
+        "callerEmail": _auth.currentUser!.email,
+        "receiverId": receiverId,
+        "receiverEmail": receiverEmail,
+        "status": "calling",
+        "createdAt": FieldValue.serverTimestamp(),
+        if (callbackId != null) "callbackId": callbackId,
+      });
+      return callId;
     });
-    return callId;
   }
 
   Stream<QuerySnapshot> incomingCalls() {
@@ -54,6 +76,119 @@ class CallService {
         .where("receiverId", isEqualTo: uid)
         .where("status", isEqualTo: "calling")
         .snapshots();
+  }
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> callStream(String callId) {
+    return _firestore.collection("calls").doc(callId).snapshots();
+  }
+
+  Future<void> updateCallStatus(String callId, String status) async {
+    await _guardFirestore(() {
+      return _firestore.collection("calls").doc(callId).update({
+        "status": status,
+        "statusUpdatedAt": FieldValue.serverTimestamp(),
+      });
+    });
+  }
+
+  Future<void> sendCallbackRequest({
+    required String callId,
+    required String targetUserId,
+    required String targetEmail,
+    required String message,
+    required String channel,
+    required Duration remindIn,
+  }) async {
+    await _guardFirestore(() async {
+      final now = Timestamp.now();
+      final remindAt = Timestamp.fromDate(DateTime.now().add(remindIn));
+
+      final callbackRef = _firestore.collection("callbacks").doc();
+      await callbackRef.set({
+        "callId": callId,
+        "ownerId": uid,
+        "ownerEmail": email,
+        "targetId": targetUserId,
+        "targetEmail": targetEmail,
+        "message": message,
+        "channel": channel,
+        "status": "pending",
+        "attemptCount": 0,
+        "createdAt": now,
+        "updatedAt": now,
+        "remindAt": remindAt,
+      });
+
+      await _firestore.collection("notifications").add({
+        "toUserId": targetUserId,
+        "fromUserId": uid,
+        "type": "callback_message",
+        "callId": callId,
+        "message": message,
+        "createdAt": FieldValue.serverTimestamp(),
+        "read": false,
+      });
+
+      await _firestore.collection("calls").doc(callId).update({
+        "callbackStatus": "pending",
+        "callbackMessage": message,
+        "callbackChannel": channel,
+        "callbackRemindAt": remindAt,
+      });
+    });
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> pendingCallbacksStream() {
+    return _firestore
+        .collection("callbacks")
+        .where("ownerId", isEqualTo: uid)
+        .where("status", isEqualTo: "pending")
+        .orderBy("remindAt")
+        .snapshots();
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> callbacksLogStream() {
+    return _firestore
+        .collection("callbacks")
+        .where("ownerId", isEqualTo: uid)
+        .orderBy("createdAt", descending: true)
+        .snapshots();
+  }
+
+  Future<void> updateCallbackStatus(String callbackId, String status) async {
+    await _guardFirestore(() {
+      return _firestore.collection("callbacks").doc(callbackId).update({
+        "status": status,
+        "updatedAt": FieldValue.serverTimestamp(),
+      });
+    });
+  }
+
+  Future<void> rescheduleCallback(String callbackId, Duration remindIn) async {
+    await _guardFirestore(() {
+      return _firestore.collection("callbacks").doc(callbackId).update({
+        "status": "pending",
+        "attemptCount": FieldValue.increment(1),
+        "updatedAt": FieldValue.serverTimestamp(),
+        "remindAt": Timestamp.fromDate(DateTime.now().add(remindIn)),
+      });
+    });
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> unreadNotificationsStream() {
+    return _firestore
+        .collection("notifications")
+        .where("toUserId", isEqualTo: uid)
+        .where("read", isEqualTo: false)
+        .snapshots();
+  }
+
+  Future<void> markNotificationRead(String notificationId) async {
+    await _guardFirestore(() {
+      return _firestore.collection("notifications").doc(notificationId).update({
+        "read": true,
+      });
+    });
   }
 }
 
@@ -73,6 +208,14 @@ class WebRTCCall {
       {'urls': 'stun:stun.l.google.com:19302'}
     ]
   };
+
+  Future<T> _guardFirestore<T>(Future<T> Function() action) async {
+    try {
+      return await action();
+    } on FirebaseException catch (e) {
+      throw mapFirestoreException(e);
+    }
+  }
 
   Future<void> start(String callId, bool isCaller) async {
     pc = await createPeerConnection(config);
@@ -100,7 +243,9 @@ class WebRTCCall {
     if (isCaller) {
       final offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      await _firestore.collection("calls").doc(callId).update({"offer": offer.toMap()});
+      await _guardFirestore(() {
+        return _firestore.collection("calls").doc(callId).update({"offer": offer.toMap()});
+      });
 
       answerSub = _firestore.collection("calls").doc(callId).snapshots().listen((doc) async {
         if (doc.data()?["answer"] != null) {
@@ -111,13 +256,17 @@ class WebRTCCall {
 
       iceSub = _listenIce(callId, "receiverIce");
     } else {
-      final doc = await _firestore.collection("calls").doc(callId).get();
+      final doc = await _guardFirestore(() {
+        return _firestore.collection("calls").doc(callId).get();
+      });
       final o = doc["offer"];
       await pc.setRemoteDescription(RTCSessionDescription(o["sdp"], o["type"]));
 
       final answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      await _firestore.collection("calls").doc(callId).update({"answer": answer.toMap()});
+      await _guardFirestore(() {
+        return _firestore.collection("calls").doc(callId).update({"answer": answer.toMap()});
+      });
 
       iceSub = _listenIce(callId, "callerIce");
     }
@@ -145,6 +294,8 @@ class WebRTCCall {
     await iceSub?.cancel();
     await localStream.dispose();
     await pc.close();
-    await _firestore.collection("calls").doc(callId).update({"status": "ended"});
+    await _guardFirestore(() {
+      return _firestore.collection("calls").doc(callId).update({"status": "ended"});
+    });
   }
 }

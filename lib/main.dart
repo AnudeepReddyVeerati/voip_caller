@@ -2,10 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'call_service.dart';
 import 'login_screen.dart';
+import 'app_error.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+  try {
+    await Firebase.initializeApp();
+  } on FirebaseException catch (e) {
+    final appError = mapFirestoreException(e);
+    debugPrint('Firebase init failed: ${appError.code} - ${appError.originalMessage}');
+  } catch (e) {
+    debugPrint('Firebase init failed: $e');
+  }
   runApp(const MyApp());
 }
 
@@ -27,7 +35,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
-    service.setUserOffline();
+    service.setUserOffline().catchError((_) {});
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -35,9 +43,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      service.setUserOnline();
+      service.setUserOnline().catchError((_) {});
     } else {
-      service.setUserOffline();
+      service.setUserOffline().catchError((_) {});
     }
   }
 

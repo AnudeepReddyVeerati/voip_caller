@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "864553918018",
+    "project_id": "voip-caller",
+    "storage_bucket": "voip-caller.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:864553918018:android:4b150f7fa59d7809eed7db",
+        "android_client_info": {
+          "package_name": "com.example.voip_caller"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "864553918018-bo0fsnjl5736b7vkvdnai1113tjierhs.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.voip_caller",
+            "certificate_hash": "0adfa84ee6c2ed96cf48900fe73e050fa3d036df"
+          }
+        },
+        {
+          "client_id": "864553918018-ednp0306vfb7oprifppnhrrtbeemrfsk.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBFPaY43P0mV5Ug_35UsLhoXs8HoRA16UM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "864553918018-ednp0306vfb7oprifppnhrrtbeemrfsk.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
