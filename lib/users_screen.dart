@@ -5,6 +5,8 @@ import 'call_service.dart';
 import 'incoming_call_screen.dart';
 import 'call_screen.dart';
 import 'app_error.dart';
+import 'video_call_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class UsersScreen extends StatefulWidget {
   const UsersScreen({super.key});
@@ -88,6 +90,39 @@ class _UsersScreenState extends State<UsersScreen> {
     }
   }
 
+  Future<void> _openVideoCall(
+    BuildContext context,
+    CallService service,
+    String uid,
+    String email,
+  ) async {
+    try {
+      setState(() => _inCall = true);
+      final callId = await service.createCall(uid, email);
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) {
+        _showError('You are not logged in.');
+        return;
+      }
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => VideoCallScreen(
+            callId: callId,
+            isCaller: true,
+            callerId: currentUser.uid,
+            calleeId: uid,
+          ),
+        ),
+      );
+    } on AppException catch (e) {
+      _showError(e.userMessage);
+    } catch (e) {
+      _showError('Failed to start the video call. Please try again.');
+    } finally {
+      if (mounted) setState(() => _inCall = false);
+    }
+  }
   Future<void> _showReminderDialog(
     BuildContext context,
     CallService service,
@@ -205,7 +240,30 @@ class _UsersScreenState extends State<UsersScreen> {
                         return ListTile(
                           title: Text(u["email"]),
                           subtitle: Text(u["isOnline"] ? "Online" : "Offline"),
-                          trailing: const Icon(Icons.call),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                tooltip: 'Voice Call',
+                                icon: const Icon(Icons.call),
+                                onPressed: u["isOnline"]
+                                    ? () => _openCall(context, service, u["uid"], u["email"])
+                                    : null,
+                              ),
+                              IconButton(
+                                tooltip: 'Video Call',
+                                icon: const Icon(Icons.videocam),
+                                onPressed: u["isOnline"]
+                                    ? () => _openVideoCall(
+                                          context,
+                                          service,
+                                          u["uid"],
+                                          u["email"],
+                                        )
+                                    : null,
+                              ),
+                            ],
+                          ),
                           onTap: u["isOnline"]
                               ? () => _openCall(context, service, u["uid"], u["email"])
                               : null,

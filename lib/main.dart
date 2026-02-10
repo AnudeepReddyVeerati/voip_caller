@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'call_service.dart';
-import 'login_screen.dart';
+import 'screens/login_screen.dart';
 import 'app_error.dart';
 
 void main() async {

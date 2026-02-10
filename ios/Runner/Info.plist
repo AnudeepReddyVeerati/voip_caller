@@ -34,6 +34,12 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera permission is required for video calls</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Microphone permission is required for video calls</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Photo library access needed for saving snapshots</string>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

@@ -9,8 +9,16 @@ class CallService {
   final _firestore = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
 
-  String get uid => _auth.currentUser!.uid;
-  String? get email => _auth.currentUser!.email;
+  User _requireUser() {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw AppException('You are not logged in.');
+    }
+    return user;
+  }
+
+  String get uid => _requireUser().uid;
+  String? get email => _requireUser().email;
 
   Future<T> _guardFirestore<T>(Future<T> Function() action) async {
     try {
@@ -22,6 +30,7 @@ class CallService {
 
   Future<void> setUserOnline() async {
     await _guardFirestore(() {
+      _requireUser();
       return _firestore.collection("users").doc(uid).set({
         "uid": uid,
         "email": _auth.currentUser!.email,
@@ -33,6 +42,7 @@ class CallService {
 
   Future<void> setUserOffline() async {
     await _guardFirestore(() {
+      _requireUser();
       return _firestore.collection("users").doc(uid).update({
         "isOnline": false,
         "lastSeen": FieldValue.serverTimestamp(),
@@ -41,6 +51,7 @@ class CallService {
   }
 
   Stream<QuerySnapshot> usersStream() {
+    _requireUser();
     return _firestore
         .collection("users")
         .where("uid", isNotEqualTo: uid)
@@ -55,6 +66,7 @@ class CallService {
     String? callbackId,
   }) async {
     return _guardFirestore(() async {
+      _requireUser();
       final callId = _callId();
       await _firestore.collection("calls").doc(callId).set({
         "callId": callId,
@@ -71,6 +83,7 @@ class CallService {
   }
 
   Stream<QuerySnapshot> incomingCalls() {
+    _requireUser();
     return _firestore
         .collection("calls")
         .where("receiverId", isEqualTo: uid)
@@ -79,11 +92,13 @@ class CallService {
   }
 
   Stream<DocumentSnapshot<Map<String, dynamic>>> callStream(String callId) {
+    _requireUser();
     return _firestore.collection("calls").doc(callId).snapshots();
   }
 
   Future<void> updateCallStatus(String callId, String status) async {
     await _guardFirestore(() {
+      _requireUser();
       return _firestore.collection("calls").doc(callId).update({
         "status": status,
         "statusUpdatedAt": FieldValue.serverTimestamp(),
@@ -100,6 +115,7 @@ class CallService {
     required Duration remindIn,
   }) async {
     await _guardFirestore(() async {
+      _requireUser();
       final now = Timestamp.now();
       final remindAt = Timestamp.fromDate(DateTime.now().add(remindIn));
 
@@ -139,6 +155,7 @@ class CallService {
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> pendingCallbacksStream() {
+    _requireUser();
     return _firestore
         .collection("callbacks")
         .where("ownerId", isEqualTo: uid)
@@ -148,6 +165,7 @@ class CallService {
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> callbacksLogStream() {
+    _requireUser();
     return _firestore
         .collection("callbacks")
         .where("ownerId", isEqualTo: uid)
@@ -157,6 +175,7 @@ class CallService {
 
   Future<void> updateCallbackStatus(String callbackId, String status) async {
     await _guardFirestore(() {
+      _requireUser();
       return _firestore.collection("callbacks").doc(callbackId).update({
         "status": status,
         "updatedAt": FieldValue.serverTimestamp(),
@@ -166,6 +185,7 @@ class CallService {
 
   Future<void> rescheduleCallback(String callbackId, Duration remindIn) async {
     await _guardFirestore(() {
+      _requireUser();
       return _firestore.collection("callbacks").doc(callbackId).update({
         "status": "pending",
         "attemptCount": FieldValue.increment(1),
@@ -176,6 +196,7 @@ class CallService {
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> unreadNotificationsStream() {
+    _requireUser();
     return _firestore
         .collection("notifications")
         .where("toUserId", isEqualTo: uid)
@@ -185,6 +206,7 @@ class CallService {
 
   Future<void> markNotificationRead(String notificationId) async {
     await _guardFirestore(() {
+      _requireUser();
       return _firestore.collection("notifications").doc(notificationId).update({
         "read": true,
       });
