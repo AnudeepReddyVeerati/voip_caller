@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'call_service.dart';
 import 'call_screen.dart';
+import 'app_error.dart';
 
 class IncomingCallScreen extends StatelessWidget {
   final QueryDocumentSnapshot call;
@@ -8,6 +10,12 @@ class IncomingCallScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final service = CallService();
+    void showError(String message) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    }
     return Scaffold(
       backgroundColor: Colors.black,
       body: Center(
@@ -29,7 +37,16 @@ class IncomingCallScreen extends StatelessWidget {
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: () => Navigator.pop(context),
+              onPressed: () async {
+                try {
+                  await service.updateCallStatus(call["callId"], "rejected");
+                  if (context.mounted) Navigator.pop(context);
+                } on AppException catch (e) {
+                  showError(e.userMessage);
+                } catch (e) {
+                  showError('Failed to reject the call.');
+                }
+              },
               child: const Text("Reject"),
             ),
           ],

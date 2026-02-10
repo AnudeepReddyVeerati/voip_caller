@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'users_screen.dart';
+import 'app_error.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -15,25 +16,48 @@ class _LoginScreenState extends State<LoginScreen> {
   final password = TextEditingController();
 
   Future<void> login() async {
-    final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
-      email: email.text.trim(),
-      password: password.text.trim(),
-    );
+    try {
+      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: email.text.trim(),
+        password: password.text.trim(),
+      );
 
-    await FirebaseFirestore.instance
-        .collection("users")
-        .doc(cred.user!.uid)
-        .set({
-      "uid": cred.user!.uid,
-      "email": cred.user!.email,
-      "isOnline": true,
-      "lastSeen": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+      await FirebaseFirestore.instance
+          .collection("users")
+          .doc(cred.user!.uid)
+          .set({
+        "uid": cred.user!.uid,
+        "email": cred.user!.email,
+        "isOnline": true,
+        "lastSeen": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const UsersScreen()),
-    );
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const UsersScreen()),
+      );
+    } on FirebaseAuthException catch (e) {
+      final appError = mapAuthException(e);
+      debugPrint('Login failed: ${appError.code} - ${appError.originalMessage}');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(appError.userMessage)),
+      );
+    } on FirebaseException catch (e) {
+      final appError = mapFirestoreException(e);
+      debugPrint('Login failed (Firestore): ${appError.code} - ${appError.originalMessage}');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(appError.userMessage)),
+      );
+    } catch (e) {
+      debugPrint('Unexpected login error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Login failed. Please try again.')),
+      );
+    }
   }
 
   @override
@@ -44,10 +68,20 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            TextField(controller: email, decoration: const InputDecoration(labelText: "Email")),
-            TextField(controller: password, decoration: const InputDecoration(labelText: "Password"), obscureText: true),
+            TextField(
+              controller: email,
+              decoration: const InputDecoration(labelText: "Email"),
+            ),
+            TextField(
+              controller: password,
+              decoration: const InputDecoration(labelText: "Password"),
+              obscureText: true,
+            ),
             const SizedBox(height: 20),
-            ElevatedButton(onPressed: login, child: const Text("Login")),
+            ElevatedButton(
+              onPressed: login,
+              child: const Text("Login"),
+            ),
           ],
         ),
       ),
