@@ -3,6 +3,9 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'call_service.dart';
 import 'app_error.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'video_call_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'call_log_service.dart';
 
 class CallScreen extends StatefulWidget {
   final String callId;
@@ -21,11 +24,14 @@ class CallScreen extends StatefulWidget {
 class _CallScreenState extends State<CallScreen> {
   final WebRTCCall call = WebRTCCall();
   final CallService service = CallService();
+  final CallLogService _callLogService = CallLogService();
   final TextEditingController _messageController = TextEditingController();
 
   bool _muted = false;
   bool _sendingCallback = false;
   bool _callReady = false;
+  late DateTime _callStartTime;
+  bool _loggedCall = false;
 
   void _showError(String message) {
     if (!mounted) return;
@@ -46,6 +52,7 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void initState() {
     super.initState();
+    _callStartTime = DateTime.now();
 
     Future.microtask(() async {
       try {
@@ -73,6 +80,43 @@ class _CallScreenState extends State<CallScreen> {
     call.close(widget.callId).catchError((_) {});
     _messageController.dispose();
     super.dispose();
+  }
+
+  Future<void> _logCall({
+    required String status,
+    required String callType,
+    required String targetUserId,
+    required String targetEmail,
+  }) async {
+    if (_loggedCall) return;
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    final isCaller = widget.isCaller;
+    final callerId = isCaller ? currentUser.uid : targetUserId;
+    final receiverId = isCaller ? targetUserId : currentUser.uid;
+
+    final callerEmail = isCaller ? (currentUser.email ?? '') : targetEmail;
+    final receiverEmail = isCaller ? targetEmail : (currentUser.email ?? '');
+
+    final callerName =
+        (isCaller ? currentUser.displayName : null) ?? callerEmail;
+    final receiverName =
+        (isCaller ? null : currentUser.displayName) ?? receiverEmail;
+
+    await _callLogService.saveCallLog(
+      callerId: callerId,
+      callerName: callerName,
+      callerEmail: callerEmail,
+      receiverId: receiverId,
+      receiverName: receiverName,
+      receiverEmail: receiverEmail,
+      callStartTime: _callStartTime,
+      callEndTime: DateTime.now(),
+      callStatus: status,
+      callType: callType,
+    );
+    _loggedCall = true;
   }
 
   Future<void> _toggleMute() async {
@@ -232,8 +276,40 @@ class _CallScreenState extends State<CallScreen> {
                     ),
                     const SizedBox(width: 12),
                     ElevatedButton(
+                      onPressed: () {
+                        final currentUser = FirebaseAuth.instance.currentUser;
+                        if (currentUser == null || targetUserId == null) {
+                          _showError('Unable to start video call.');
+                          return;
+                        }
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => VideoCallScreen(
+                              callId: widget.callId,
+                              isCaller: widget.isCaller,
+                              callerId: widget.isCaller ? currentUser.uid : targetUserId,
+                              calleeId: widget.isCaller ? targetUserId : currentUser.uid,
+                            ),
+                          ),
+                        );
+                      },
+                      child: const Text("Video"),
+                    ),
+                    const SizedBox(width: 12),
+                    ElevatedButton(
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                      onPressed: () => Navigator.pop(context),
+                      onPressed: () async {
+                        if (targetUserId != null && targetEmail != null) {
+                          await _logCall(
+                            status: 'completed',
+                            callType: 'audio',
+                            targetUserId: targetUserId,
+                            targetEmail: targetEmail,
+                          );
+                        }
+                        if (context.mounted) Navigator.pop(context);
+                      },
                       child: const Text("End Call"),
                     ),
                   ],

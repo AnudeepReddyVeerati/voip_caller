@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'call_service.dart';
 import 'call_screen.dart';
 import 'app_error.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'call_log_service.dart';
 
 class IncomingCallScreen extends StatelessWidget {
   final QueryDocumentSnapshot call;
@@ -11,6 +13,7 @@ class IncomingCallScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final service = CallService();
+    final callLogService = CallLogService();
     void showError(String message) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message)),
@@ -40,6 +43,21 @@ class IncomingCallScreen extends StatelessWidget {
               onPressed: () async {
                 try {
                   await service.updateCallStatus(call["callId"], "rejected");
+                  final currentUser = FirebaseAuth.instance.currentUser;
+                  if (currentUser != null) {
+                    await callLogService.saveCallLog(
+                      callerId: call["callerId"] ?? '',
+                      callerName: call["callerEmail"] ?? '',
+                      callerEmail: call["callerEmail"] ?? '',
+                      receiverId: currentUser.uid,
+                      receiverName: currentUser.displayName ?? (currentUser.email ?? ''),
+                      receiverEmail: currentUser.email ?? '',
+                      callStartTime: DateTime.now(),
+                      callEndTime: DateTime.now(),
+                      callStatus: 'rejected',
+                      callType: 'audio',
+                    );
+                  }
                   if (context.mounted) Navigator.pop(context);
                 } on AppException catch (e) {
                   showError(e.userMessage);
