@@ -14,7 +14,7 @@ class CallLogService {
     final snap = await _firestore
         .collection('call_logs')
         .where('participants', arrayContains: uid)
-        .orderBy('createdAt', descending: true)
+        .orderBy('callStartTime', descending: true)
         .limit(limit)
         .get();
     return snap.docs.map((d) => CallLog.fromDoc(d)).toList();
@@ -23,7 +23,7 @@ class CallLogService {
   Future<List<CallLog>> getAllCallLogs({int limit = 500}) async {
     final snap = await _firestore
         .collection('call_logs')
-        .orderBy('createdAt', descending: true)
+        .orderBy('callStartTime', descending: true)
         .limit(limit)
         .get();
     return snap.docs.map((d) => CallLog.fromDoc(d)).toList();

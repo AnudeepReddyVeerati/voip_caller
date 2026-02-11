@@ -222,12 +222,19 @@ class WebRTCCall {
 
   StreamSubscription? answerSub;
   StreamSubscription? iceSub;
+  bool _appliedAnswer = false;
+  final Set<String> _seenIceIds = {};
 
   final _firestore = FirebaseFirestore.instance;
 
   final config = {
     'iceServers': [
-      {'urls': 'stun:stun.l.google.com:19302'}
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {
+        'urls': 'turn:openrelay.metered.ca:80',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
     ]
   };
 
@@ -253,14 +260,12 @@ class WebRTCCall {
     }
 
     pc.onIceCandidate = (c) {
-      if (c != null) {
-        _firestore
-            .collection("calls")
-            .doc(callId)
-            .collection(isCaller ? "callerIce" : "receiverIce")
-            .add(c.toMap());
-      }
-    };
+      _firestore
+          .collection("calls")
+          .doc(callId)
+          .collection(isCaller ? "callerIce" : "receiverIce")
+          .add(c.toMap());
+        };
 
     if (isCaller) {
       final offer = await pc.createOffer();
@@ -270,8 +275,10 @@ class WebRTCCall {
       });
 
       answerSub = _firestore.collection("calls").doc(callId).snapshots().listen((doc) async {
-        if (doc.data()?["answer"] != null) {
-          final a = doc["answer"];
+        if (_appliedAnswer) return;
+        final a = doc.data()?["answer"];
+        if (a is Map && (a["sdp"] as String?)?.isNotEmpty == true) {
+          _appliedAnswer = true;
           await pc.setRemoteDescription(RTCSessionDescription(a["sdp"], a["type"]));
         }
       });
@@ -302,6 +309,8 @@ class WebRTCCall {
         .snapshots()
         .listen((s) {
       for (var d in s.docs) {
+        if (_seenIceIds.contains(d.id)) continue;
+        _seenIceIds.add(d.id);
         pc.addCandidate(RTCIceCandidate(
           d["candidate"],
           d["sdpMid"],

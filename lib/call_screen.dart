@@ -154,7 +154,7 @@ class _CallScreenState extends State<CallScreen> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: channel,
+                initialValue: channel,
                 decoration: const InputDecoration(labelText: "Channel"),
                 items: const [
                   DropdownMenuItem(value: "WhatsApp", child: Text("WhatsApp")),
@@ -167,7 +167,7 @@ class _CallScreenState extends State<CallScreen> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<int>(
-                value: remindMinutes,
+                initialValue: remindMinutes,
                 decoration: const InputDecoration(labelText: "Remind in"),
                 items: const [
                   DropdownMenuItem(value: 5, child: Text("5 minutes")),
@@ -238,7 +238,7 @@ class _CallScreenState extends State<CallScreen> {
             ),
           );
         }
-        final data = snapshot.data?.data() as Map<String, dynamic>?;
+        final data = snapshot.data?.data();
         final targetUserId = data == null
             ? null
             : (widget.isCaller ? data["receiverId"] : data["callerId"]) as String?;

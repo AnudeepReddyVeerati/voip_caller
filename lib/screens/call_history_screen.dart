@@ -23,12 +23,20 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
 
   Future<void> _loadCallLogs() async {
     setState(() => _isLoading = true);
-    final logs = await _callLogService.getUserCallLogs(limit: 100);
-    if (!mounted) return;
-    setState(() {
-      _callLogs = logs;
-      _isLoading = false;
-    });
+    try {
+      final logs = await _callLogService.getUserCallLogs(limit: 100);
+      if (!mounted) return;
+      setState(() {
+        _callLogs = logs;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to load call logs.')),
+      );
+    }
   }
 
   List<CallLog> get _filteredLogs {

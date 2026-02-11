@@ -1,7 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'dart:async';
 
-Future<void> answerCall(
+Future<StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>> answerCall(
   String callId,
   RTCPeerConnection pc,
   MediaStream localStream,
@@ -14,7 +15,7 @@ Future<void> answerCall(
   }
 
   final snapshot = await callDoc.get();
-  final data = snapshot.data() as Map<String, dynamic>?;
+  final data = snapshot.data();
   if (data == null) return;
 
   final offer = data['offer'] as Map<String, dynamic>?;
@@ -26,24 +27,40 @@ Future<void> answerCall(
   final answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   await callDoc.update({
-    'answer': {'sdp': answer.sdp, 'type': answer.type}
+    'answer': {'sdp': answer.sdp, 'type': answer.type},
+    'status': 'connected',
   });
 
   pc.onIceCandidate = (candidate) {
-    if (candidate != null) {
-      callDoc.update({
-        'iceCandidatesCallee':
-            FieldValue.arrayUnion([candidate.toMap()['candidate']])
-      });
-    }
-  };
+    callDoc.update({
+      'iceCandidatesCallee': FieldValue.arrayUnion([
+        {
+          'candidate': candidate.candidate,
+          'sdpMid': candidate.sdpMid,
+          'sdpMLineIndex': candidate.sdpMLineIndex,
+        }
+      ])
+    });
+    };
 
-  callDoc.snapshots().listen((snap) async {
+  int seenRemoteIceCount = 0;
+  final sub = callDoc.snapshots().listen((snap) async {
     final data = snap.data();
     if (data == null) return;
     final remoteIce = data['iceCandidatesCaller'] as List<dynamic>? ?? [];
-    for (final cand in remoteIce) {
-      await pc.addCandidate(RTCIceCandidate(cand, '', 0));
+    for (var i = seenRemoteIceCount; i < remoteIce.length; i++) {
+      final cand = remoteIce[i];
+      if (cand is Map) {
+        await pc.addCandidate(
+          RTCIceCandidate(
+            cand['candidate'],
+            cand['sdpMid'],
+            cand['sdpMLineIndex'],
+          ),
+        );
+      }
     }
+    seenRemoteIceCount = remoteIce.length;
   });
+  return sub;
 }

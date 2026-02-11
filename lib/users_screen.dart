@@ -6,6 +6,7 @@ import 'incoming_call_screen.dart';
 import 'call_screen.dart';
 import 'app_error.dart';
 import 'video_call_screen.dart';
+import 'screens/call_history_screen.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class UsersScreen extends StatefulWidget {
@@ -221,7 +222,21 @@ class _UsersScreenState extends State<UsersScreen> {
     final service = CallService();
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Online Users")),
+      appBar: AppBar(
+        title: const Text("Online Users"),
+        actions: [
+          IconButton(
+            tooltip: 'Call History',
+            icon: const Icon(Icons.history),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const CallHistoryScreen()),
+              );
+            },
+          ),
+        ],
+      ),
       body: Stack(
         children: [
           Column(
