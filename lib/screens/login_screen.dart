@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'register_screen.dart';
 import '../users_screen.dart';
 import '../app_error.dart';
-import 'register_screen.dart';
+import '../users_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -40,20 +41,17 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     } on FirebaseAuthException catch (e) {
       final appError = mapAuthException(e);
-      debugPrint('Login failed: ${appError.code} - ${appError.originalMessage}');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(appError.userMessage)),
       );
     } on FirebaseException catch (e) {
       final appError = mapFirestoreException(e);
-      debugPrint('Login failed (Firestore): ${appError.code} - ${appError.originalMessage}');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(appError.userMessage)),
       );
     } catch (e) {
-      debugPrint('Unexpected login error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Login failed. Please try again.')),
