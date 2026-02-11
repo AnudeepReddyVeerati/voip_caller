@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'call_log_service.dart';
 
 class VideoCallScreen extends StatefulWidget {
   final String callId;
@@ -27,22 +29,33 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
   RTCPeerConnection? _pc;
   MediaStream? _localStream;
+  MediaStream? _remoteStream;
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _answerSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _iceSub;
 
   final _firestore = FirebaseFirestore.instance;
+  final _callLogService = CallLogService();
   int _seenRemoteIceCount = 0;
+  bool _loggedCall = false;
+  bool _appliedAnswer = false;
+  late DateTime _callStartTime;
 
   final _config = {
     'iceServers': [
-      {'urls': 'stun:stun.l.google.com:19302'}
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {
+        'urls': 'turn:openrelay.metered.ca:80',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
     ]
   };
 
   @override
   void initState() {
     super.initState();
+    _callStartTime = DateTime.now();
     _init();
   }
 
@@ -85,25 +98,27 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     // ignore: avoid_print
     print('Local tracks: ${_localStream!.getTracks().map((t) => t.kind).toList()}');
 
-    _pc!.onTrack = (event) {
+    _pc!.onTrack = (event) async {
       // ignore: avoid_print
       print('onTrack: kind=${event.track.kind} streams=${event.streams.length}');
-      if (event.streams.isNotEmpty && event.track.kind == 'video') {
+      if (event.streams.isNotEmpty) {
         _remoteRenderer.srcObject = event.streams[0];
         if (mounted) setState(() {});
+        return;
       }
-    };
-    _pc!.onAddStream = (stream) {
-      // ignore: avoid_print
-      print('onAddStream: tracks=${stream.getTracks().map((t) => t.kind).toList()}');
-      _remoteRenderer.srcObject = stream;
+      _remoteStream ??= await createLocalMediaStream('remote');
+      _remoteStream!.addTrack(event.track);
+      _remoteRenderer.srcObject = _remoteStream;
       if (mounted) setState(() {});
     };
-
     final callDoc = _firestore.collection('video_calls').doc(widget.callId);
+    await callDoc.set({
+      'callId': widget.callId,
+      'callerId': widget.callerId,
+      'calleeId': widget.calleeId,
+    }, SetOptions(merge: true));
 
     _pc!.onIceCandidate = (c) {
-      if (c == null) return;
       final field = widget.isCaller ? 'iceCandidatesCaller' : 'iceCandidatesCallee';
       callDoc.update({
         field: FieldValue.arrayUnion([
@@ -135,10 +150,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         final data = doc.data();
         if (data == null) return;
         final answer = data['answer'];
-        if (answer is Map && (answer['sdp'] as String).isNotEmpty) {
+        if (answer is Map &&
+            (answer['sdp'] as String).isNotEmpty &&
+            !_appliedAnswer) {
+          _appliedAnswer = true;
           await _pc!.setRemoteDescription(
             RTCSessionDescription(answer['sdp'], answer['type']),
           );
+          await callDoc.update({'status': 'connected'});
         }
         _applyRemoteIce(data, isCaller: true);
       });
@@ -187,7 +206,47 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     await _answerSub?.cancel();
     await _iceSub?.cancel();
     await _localStream?.dispose();
+    await _remoteStream?.dispose();
     await _pc?.close();
+  }
+
+  Future<String> _getUserEmail(String uid) async {
+    final doc = await _firestore.collection('users').doc(uid).get();
+    return doc.data()?['email'] ?? '';
+  }
+
+  Future<void> _logCall({
+    required String status,
+  }) async {
+    if (_loggedCall) return;
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    final isCaller = widget.isCaller;
+    final callerId = isCaller ? currentUser.uid : widget.callerId;
+    final receiverId = isCaller ? widget.calleeId : currentUser.uid;
+
+    final callerEmail =
+        isCaller ? (currentUser.email ?? '') : await _getUserEmail(widget.callerId);
+    final receiverEmail =
+        isCaller ? await _getUserEmail(widget.calleeId) : (currentUser.email ?? '');
+
+    final callerName = callerEmail.isNotEmpty ? callerEmail : callerId;
+    final receiverName = receiverEmail.isNotEmpty ? receiverEmail : receiverId;
+
+    await _callLogService.saveCallLog(
+      callerId: callerId,
+      callerName: callerName,
+      callerEmail: callerEmail,
+      receiverId: receiverId,
+      receiverName: receiverName,
+      receiverEmail: receiverEmail,
+      callStartTime: _callStartTime,
+      callEndTime: DateTime.now(),
+      callStatus: status,
+      callType: 'video',
+    );
+    _loggedCall = true;
   }
 
   @override
@@ -220,7 +279,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             bottom: 24,
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: () => Navigator.pop(context),
+              onPressed: () async {
+                await _logCall(status: 'completed');
+                if (mounted) Navigator.pop(context);
+              },
               child: const Text('End'),
             ),
           ),

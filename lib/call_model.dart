@@ -29,6 +29,8 @@ class CallLog {
 
   factory CallLog.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
+    final createdAt = (data['createdAt'] as Timestamp?)?.toDate();
+    final callStart = (data['callStartTime'] as Timestamp?)?.toDate();
     return CallLog(
       id: doc.id,
       callerId: data['callerId'] ?? '',
@@ -39,8 +41,8 @@ class CallLog {
       receiverEmail: data['receiverEmail'] ?? '',
       callType: data['callType'] ?? 'audio',
       callStatus: data['callStatus'] ?? 'completed',
-      durationSeconds: (data['durationSeconds'] ?? 0) as int,
-      createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      durationSeconds: (data['durationSeconds'] as num?)?.toInt() ?? 0,
+      createdAt: createdAt ?? callStart ?? DateTime.now(),
     );
   }
 

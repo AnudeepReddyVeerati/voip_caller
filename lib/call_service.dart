@@ -58,7 +58,12 @@ class CallService {
         .snapshots();
   }
 
-  String _callId() => Random().nextInt(999999).toString();
+  String _generateCallId() {
+    // Better ID generation with timestamp to ensure uniqueness
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final random = Random().nextInt(999999);
+    return '$timestamp$random';
+  }
 
   Future<String> createCall(
     String receiverId,
@@ -67,7 +72,13 @@ class CallService {
   }) async {
     return _guardFirestore(() async {
       _requireUser();
-      final callId = _callId();
+      final callId = _generateCallId();
+      
+      // Validate receiver
+      if (receiverId.isEmpty || receiverEmail.isEmpty) {
+        throw AppException('Invalid receiver information.');
+      }
+      
       await _firestore.collection("calls").doc(callId).set({
         "callId": callId,
         "callerId": uid,
@@ -116,17 +127,24 @@ class CallService {
   }) async {
     await _guardFirestore(() async {
       _requireUser();
+      
+      // Validate inputs
+      if (message.trim().isEmpty) {
+        throw AppException('Message cannot be empty.');
+      }
+      
       final now = Timestamp.now();
       final remindAt = Timestamp.fromDate(DateTime.now().add(remindIn));
 
       final callbackRef = _firestore.collection("callbacks").doc();
       await callbackRef.set({
+        "callbackId": callbackRef.id,
         "callId": callId,
         "ownerId": uid,
         "ownerEmail": email,
         "targetId": targetUserId,
         "targetEmail": targetEmail,
-        "message": message,
+        "message": message.trim(),
         "channel": channel,
         "status": "pending",
         "attemptCount": 0,
@@ -135,21 +153,25 @@ class CallService {
         "remindAt": remindAt,
       });
 
+      // Send notification
       await _firestore.collection("notifications").add({
         "toUserId": targetUserId,
         "fromUserId": uid,
+        "fromEmail": email,
         "type": "callback_message",
         "callId": callId,
-        "message": message,
+        "message": message.trim(),
         "createdAt": FieldValue.serverTimestamp(),
         "read": false,
       });
 
+      // Update call document
       await _firestore.collection("calls").doc(callId).update({
         "callbackStatus": "pending",
-        "callbackMessage": message,
+        "callbackMessage": message.trim(),
         "callbackChannel": channel,
         "callbackRemindAt": remindAt,
+        "callbackUpdatedAt": FieldValue.serverTimestamp(),
       });
     });
   }
@@ -201,6 +223,7 @@ class CallService {
         .collection("notifications")
         .where("toUserId", isEqualTo: uid)
         .where("read", isEqualTo: false)
+        .orderBy("createdAt", descending: true)
         .snapshots();
   }
 
@@ -209,6 +232,44 @@ class CallService {
       _requireUser();
       return _firestore.collection("notifications").doc(notificationId).update({
         "read": true,
+        "readAt": FieldValue.serverTimestamp(),
+      });
+    });
+  }
+
+  Future<void> markAllNotificationsRead() async {
+    await _guardFirestore(() async {
+      _requireUser();
+      final snapshot = await _firestore
+          .collection("notifications")
+          .where("toUserId", isEqualTo: uid)
+          .where("read", isEqualTo: false)
+          .get();
+
+      final batch = _firestore.batch();
+      for (var doc in snapshot.docs) {
+        batch.update(doc.reference, {
+          "read": true,
+          "readAt": FieldValue.serverTimestamp(),
+        });
+      }
+      await batch.commit();
+    });
+  }
+
+  Future<void> deleteNotification(String notificationId) async {
+    await _guardFirestore(() {
+      _requireUser();
+      return _firestore.collection("notifications").doc(notificationId).delete();
+    });
+  }
+
+  Future<void> endCall(String callId) async {
+    await _guardFirestore(() async {
+      _requireUser();
+      await _firestore.collection("calls").doc(callId).update({
+        "status": "ended",
+        "endedAt": FieldValue.serverTimestamp(),
       });
     });
   }
@@ -217,18 +278,33 @@ class CallService {
 // ================= WEBRTC =================
 
 class WebRTCCall {
-  late RTCPeerConnection pc;
-  late MediaStream localStream;
+  RTCPeerConnection? pc;
+  MediaStream? localStream;
 
   StreamSubscription? answerSub;
   StreamSubscription? iceSub;
+  bool _appliedAnswer = false;
+  final Set<String> _seenIceIds = {};
+  bool _isClosing = false;
 
   final _firestore = FirebaseFirestore.instance;
 
   final config = {
     'iceServers': [
-      {'urls': 'stun:stun.l.google.com:19302'}
-    ]
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {'urls': 'stun:stun1.l.google.com:19302'},
+      {
+        'urls': 'turn:openrelay.metered.ca:80',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
+      {
+        'urls': 'turn:openrelay.metered.ca:443',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
+    ],
+    'iceCandidatePoolSize': 10,
   };
 
   Future<T> _guardFirestore<T>(Future<T> Function() action) async {
@@ -240,57 +316,111 @@ class WebRTCCall {
   }
 
   Future<void> start(String callId, bool isCaller) async {
-    pc = await createPeerConnection(config);
+    try {
+      pc = await createPeerConnection(config);
 
-    localStream = await navigator.mediaDevices.getUserMedia({
-      'audio': true,
-      'video': false,
-    });
+      localStream = await navigator.mediaDevices.getUserMedia({
+        'audio': true,
+        'video': false,
+      });
 
-    for (var track in localStream.getAudioTracks()) {
-      track.enabled = true; // 🎤 mic ON
-      pc.addTrack(track, localStream);
-    }
+      if (localStream == null || pc == null) return;
 
-    pc.onIceCandidate = (c) {
-      if (c != null) {
-        _firestore
+for (var track in localStream!.getAudioTracks()) {
+  track.enabled = true;
+  await pc!.addTrack(track, localStream!);
+}
+
+
+      pc!.onIceCandidate = (candidate) {
+        if (candidate.candidate != null) {
+          _firestore
+              .collection("calls")
+              .doc(callId)
+              .collection(isCaller ? "callerIce" : "receiverIce")
+              .add(candidate.toMap())
+              .catchError((e) {
+            // Silent fail for ICE candidates
+            print('Failed to add ICE candidate: $e');
+          });
+        }
+      };
+
+      pc!.onConnectionState = (state) {
+        print('Connection state: $state');
+        if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
+            state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+          // Connection failed or closed
+          _handleConnectionFailure(callId);
+        }
+      };
+
+      if (isCaller) {
+        final offer = await pc!.createOffer();
+        await pc!.setLocalDescription(offer);
+        await _guardFirestore(() {
+          return _firestore.collection("calls").doc(callId).update({
+            "offer": offer.toMap(),
+            "offerCreatedAt": FieldValue.serverTimestamp(),
+          });
+        });
+
+        answerSub = _firestore
             .collection("calls")
             .doc(callId)
-            .collection(isCaller ? "callerIce" : "receiverIce")
-            .add(c.toMap());
-      }
-    };
+            .snapshots()
+            .listen((doc) async {
+          if (_appliedAnswer || pc == null) return;
+          final data = doc.data();
+          if (data == null) return;
+          
+          final answer = data["answer"];
+          if (answer is Map && (answer["sdp"] as String?)?.isNotEmpty == true) {
+            _appliedAnswer = true;
+            try {
+              await pc!.setRemoteDescription(
+                RTCSessionDescription(answer["sdp"], answer["type"]),
+              );
+            } catch (e) {
+              print('Failed to set remote description: $e');
+            }
+          }
+        });
 
-    if (isCaller) {
-      final offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      await _guardFirestore(() {
-        return _firestore.collection("calls").doc(callId).update({"offer": offer.toMap()});
-      });
-
-      answerSub = _firestore.collection("calls").doc(callId).snapshots().listen((doc) async {
-        if (doc.data()?["answer"] != null) {
-          final a = doc["answer"];
-          await pc.setRemoteDescription(RTCSessionDescription(a["sdp"], a["type"]));
+        iceSub = _listenIce(callId, "receiverIce");
+      } else {
+        final doc = await _guardFirestore(() {
+          return _firestore.collection("calls").doc(callId).get();
+        });
+        
+        final data = doc.data();
+        if (data == null) {
+          throw AppException('Call data not found.');
         }
-      });
+        
+        final offer = data["offer"];
+        if (offer == null) {
+          throw AppException('Call offer not found.');
+        }
 
-      iceSub = _listenIce(callId, "receiverIce");
-    } else {
-      final doc = await _guardFirestore(() {
-        return _firestore.collection("calls").doc(callId).get();
-      });
-      final o = doc["offer"];
-      await pc.setRemoteDescription(RTCSessionDescription(o["sdp"], o["type"]));
+        await pc!.setRemoteDescription(
+          RTCSessionDescription(offer["sdp"], offer["type"]),
+        );
 
-      final answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await _guardFirestore(() {
-        return _firestore.collection("calls").doc(callId).update({"answer": answer.toMap()});
-      });
+        final answer = await pc!.createAnswer();
+        await pc!.setLocalDescription(answer);
+        await _guardFirestore(() {
+          return _firestore.collection("calls").doc(callId).update({
+            "answer": answer.toMap(),
+            "answerCreatedAt": FieldValue.serverTimestamp(),
+          });
+        });
 
-      iceSub = _listenIce(callId, "callerIce");
+        iceSub = _listenIce(callId, "callerIce");
+      }
+    } catch (e) {
+      await _cleanup();
+      rethrow;
     }
   }
 
@@ -300,24 +430,89 @@ class WebRTCCall {
         .doc(callId)
         .collection(path)
         .snapshots()
-        .listen((s) {
-      for (var d in s.docs) {
-        pc.addCandidate(RTCIceCandidate(
-          d["candidate"],
-          d["sdpMid"],
-          d["sdpMLineIndex"],
-        ));
+        .listen(
+      (snapshot) {
+        for (var doc in snapshot.docs) {
+          if (_seenIceIds.contains(doc.id) || pc == null) continue;
+          _seenIceIds.add(doc.id);
+          
+          try {
+            final data = doc.data();
+            pc!.addCandidate(RTCIceCandidate(
+              data["candidate"],
+              data["sdpMid"],
+              data["sdpMLineIndex"],
+            ));
+          } catch (e) {
+            print('Failed to add ICE candidate: $e');
+          }
+        }
+      },
+      onError: (e) {
+        print('Error listening to ICE candidates: $e');
+      },
+    );
+  }
+
+  void _handleConnectionFailure(String callId) {
+    // Handle connection failure
+    print('WebRTC connection failed for call: $callId');
+  }
+
+  Future<void> _cleanup() async {
+    try {
+      await answerSub?.cancel();
+      await iceSub?.cancel();
+      
+      if (localStream != null) {
+        for (var track in localStream!.getTracks()) {
+          await track.stop();
+        }
+        await localStream!.dispose();
+        localStream = null;
       }
-    });
+      
+      if (pc != null) {
+        await pc!.close();
+        pc = null;
+      }
+    } catch (e) {
+      print('Error during cleanup: $e');
+    }
   }
 
   Future<void> close(String callId) async {
-    await answerSub?.cancel();
-    await iceSub?.cancel();
-    await localStream.dispose();
-    await pc.close();
-    await _guardFirestore(() {
-      return _firestore.collection("calls").doc(callId).update({"status": "ended"});
-    });
+    if (_isClosing) return;
+    _isClosing = true;
+
+    try {
+      await _cleanup();
+      
+      await _guardFirestore(() {
+        return _firestore.collection("calls").doc(callId).update({
+          "status": "ended",
+          "endedAt": FieldValue.serverTimestamp(),
+        });
+      });
+    } catch (e) {
+      print('Error closing call: $e');
+    } finally {
+      _isClosing = false;
+    }
+  }
+
+  // Toggle audio track
+  void toggleAudio(bool enabled) {
+    if (localStream == null) return;
+    for (var track in localStream!.getAudioTracks()) {
+      track.enabled = enabled;
+    }
+  }
+
+  // Check if audio is enabled
+  bool isAudioEnabled() {
+    if (localStream == null) return false;
+    final tracks = localStream!.getAudioTracks();
+    return tracks.isNotEmpty && tracks.first.enabled;
   }
 }

@@ -6,7 +6,9 @@ import 'incoming_call_screen.dart';
 import 'call_screen.dart';
 import 'app_error.dart';
 import 'video_call_screen.dart';
+import 'screens/call_history_screen.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../screens/call_history_screen.dart';
 
 class UsersScreen extends StatefulWidget {
   const UsersScreen({super.key});
@@ -221,7 +223,21 @@ class _UsersScreenState extends State<UsersScreen> {
     final service = CallService();
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Online Users")),
+      appBar: AppBar(
+        title: const Text("Online Users"),
+        actions: [
+          IconButton(
+            tooltip: 'Call History',
+            icon: const Icon(Icons.history),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const CallHistoryScreenEnhanced()),
+              );
+            },
+          ),
+        ],
+      ),
       body: Stack(
         children: [
           Column(
@@ -328,8 +344,61 @@ class _UsersScreenState extends State<UsersScreen> {
                   await Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => IncomingCallScreen(call: s.data!.docs.first),
-                    ),
+  builder: (_) {
+    final doc = s.data!.docs.first;
+    final data = doc.data() as Map<String, dynamic>;
+
+    return IncomingCallScreen(
+  callerId: data['callerId'] ?? '',
+  callerName: data['callerName'] ?? 'Unknown',
+  callerEmail: data['callerEmail'] ?? '',
+  callType: data['callType'] ?? 'audio',
+  callId: doc.id,
+
+  onAccept: () async {
+    // Close incoming UI
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+
+    // START WebRTC as RECEIVER
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CallScreen(
+          callId: doc.id,
+          isCaller: false,
+        ),
+      ),
+    );
+  },
+
+  onReject: () async {
+    await FirebaseFirestore.instance
+        .collection('calls')
+        .doc(doc.id)
+        .update({'status': 'rejected'});
+
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+  },
+
+  onCallback: () async {
+    await FirebaseFirestore.instance
+        .collection('calls')
+        .doc(doc.id)
+        .update({'status': 'callback_later'});
+
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+  },
+);
+
+  },
+),
+
                   );
                   if (mounted) setState(() => _inCall = false);
                 });

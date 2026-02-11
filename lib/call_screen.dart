@@ -30,13 +30,30 @@ class _CallScreenState extends State<CallScreen> {
   bool _muted = false;
   bool _sendingCallback = false;
   bool _callReady = false;
+  bool _isEnding = false;
   late DateTime _callStartTime;
   bool _loggedCall = false;
+  String _callDuration = "00:00";
 
   void _showError(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red.shade700,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _showSuccess(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.green.shade700,
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 
@@ -47,6 +64,19 @@ class _CallScreenState extends State<CallScreen> {
     }
     await Permission.camera.request();
     return true;
+  }
+
+  void _startCallTimer() {
+    Future.delayed(const Duration(seconds: 1), () {
+      if (!mounted || !_callReady) return;
+      final duration = DateTime.now().difference(_callStartTime);
+      final minutes = duration.inMinutes.toString().padLeft(2, '0');
+      final seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
+      setState(() {
+        _callDuration = "$minutes:$seconds";
+      });
+      _startCallTimer();
+    });
   }
 
   @override
@@ -63,14 +93,19 @@ class _CallScreenState extends State<CallScreen> {
           return;
         }
         await call.start(widget.callId, widget.isCaller);
-        _callReady = true;
+        if (mounted) {
+          setState(() => _callReady = true);
+          _startCallTimer();
+        }
         if (!widget.isCaller) {
           await service.updateCallStatus(widget.callId, "accepted");
         }
       } on AppException catch (e) {
         _showError(e.userMessage);
+        if (mounted) Navigator.pop(context);
       } catch (e) {
         _showError('Failed to start the call.');
+        if (mounted) Navigator.pop(context);
       }
     });
   }
@@ -92,36 +127,42 @@ class _CallScreenState extends State<CallScreen> {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) return;
 
-    final isCaller = widget.isCaller;
-    final callerId = isCaller ? currentUser.uid : targetUserId;
-    final receiverId = isCaller ? targetUserId : currentUser.uid;
+    try {
+      final isCaller = widget.isCaller;
+      final callerId = isCaller ? currentUser.uid : targetUserId;
+      final receiverId = isCaller ? targetUserId : currentUser.uid;
 
-    final callerEmail = isCaller ? (currentUser.email ?? '') : targetEmail;
-    final receiverEmail = isCaller ? targetEmail : (currentUser.email ?? '');
+      final callerEmail = isCaller ? (currentUser.email ?? '') : targetEmail;
+      final receiverEmail = isCaller ? targetEmail : (currentUser.email ?? '');
 
-    final callerName =
-        (isCaller ? currentUser.displayName : null) ?? callerEmail;
-    final receiverName =
-        (isCaller ? null : currentUser.displayName) ?? receiverEmail;
+      final callerName =
+          (isCaller ? currentUser.displayName : null) ?? callerEmail;
+      final receiverName =
+          (isCaller ? null : currentUser.displayName) ?? receiverEmail;
 
-    await _callLogService.saveCallLog(
-      callerId: callerId,
-      callerName: callerName,
-      callerEmail: callerEmail,
-      receiverId: receiverId,
-      receiverName: receiverName,
-      receiverEmail: receiverEmail,
-      callStartTime: _callStartTime,
-      callEndTime: DateTime.now(),
-      callStatus: status,
-      callType: callType,
-    );
-    _loggedCall = true;
+      await _callLogService.saveCallLog(
+        callerId: callerId,
+        callerName: callerName,
+        callerEmail: callerEmail,
+        receiverId: receiverId,
+        receiverName: receiverName,
+        receiverEmail: receiverEmail,
+        callStartTime: _callStartTime,
+        callEndTime: DateTime.now(),
+        callStatus: status,
+        callType: callType,
+      );
+      _loggedCall = true;
+    } catch (e) {
+      // Silent fail for logging
+      debugPrint('Failed to log call: $e');
+    }
   }
 
   Future<void> _toggleMute() async {
     if (!_callReady) return;
-    final tracks = call.localStream.getAudioTracks();
+    final tracks = call.localStream?.getAudioTracks() ?? [];
+
     if (tracks.isEmpty) return;
     final current = tracks.first.enabled;
     setState(() => _muted = !current);
@@ -141,61 +182,100 @@ class _CallScreenState extends State<CallScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) {
-        return AlertDialog(
-          title: const Text("Callback & Reminder"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: _messageController,
-                decoration: const InputDecoration(
-                  labelText: "Message to caller",
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: const Text(
+                "Set Callback Reminder",
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: _messageController,
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                        labelText: "Message to caller",
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        filled: true,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      value: channel,
+                      decoration: InputDecoration(
+                        labelText: "Notification Channel",
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        filled: true,
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: "WhatsApp", child: Text("WhatsApp")),
+                        DropdownMenuItem(value: "Google", child: Text("Google")),
+                        DropdownMenuItem(value: "Phone", child: Text("Phone")),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) {
+                          setDialogState(() => channel = v);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<int>(
+                      value: remindMinutes,
+                      decoration: InputDecoration(
+                        labelText: "Remind me in",
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        filled: true,
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 5, child: Text("5 minutes")),
+                        DropdownMenuItem(value: 10, child: Text("10 minutes")),
+                        DropdownMenuItem(value: 30, child: Text("30 minutes")),
+                        DropdownMenuItem(value: 60, child: Text("1 hour")),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) {
+                          setDialogState(() => remindMinutes = v);
+                        }
+                      },
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                value: channel,
-                decoration: const InputDecoration(labelText: "Channel"),
-                items: const [
-                  DropdownMenuItem(value: "WhatsApp", child: Text("WhatsApp")),
-                  DropdownMenuItem(value: "Google", child: Text("Google")),
-                  DropdownMenuItem(value: "Phone", child: Text("Phone")),
-                ],
-                onChanged: (v) {
-                  if (v != null) channel = v;
-                },
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<int>(
-                value: remindMinutes,
-                decoration: const InputDecoration(labelText: "Remind in"),
-                items: const [
-                  DropdownMenuItem(value: 5, child: Text("5 minutes")),
-                  DropdownMenuItem(value: 10, child: Text("10 minutes")),
-                  DropdownMenuItem(value: 30, child: Text("30 minutes")),
-                  DropdownMenuItem(value: 60, child: Text("1 hour")),
-                ],
-                onChanged: (v) {
-                  if (v != null) remindMinutes = v;
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text("Cancel"),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text("Set"),
-            ),
-          ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text("Cancel"),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  style: ElevatedButton.styleFrom(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: const Text("Set Reminder"),
+                ),
+              ],
+            );
+          },
         );
       },
     );
 
-    if (confirmed != true) return;
+    if (confirmed != true || !mounted) return;
     if (_sendingCallback) return;
     setState(() => _sendingCallback = true);
 
@@ -209,9 +289,7 @@ class _CallScreenState extends State<CallScreen> {
         remindIn: Duration(minutes: remindMinutes),
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Callback reminder set.")),
-        );
+        _showSuccess("Callback reminder set successfully!");
       }
     } on AppException catch (e) {
       _showError(e.userMessage);
@@ -222,103 +300,305 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  Future<void> _endCall(String? targetUserId, String? targetEmail) async {
+    if (_isEnding) return;
+    setState(() => _isEnding = true);
+
+    if (targetUserId != null && targetEmail != null) {
+      await _logCall(
+        status: 'completed',
+        callType: 'audio',
+        targetUserId: targetUserId,
+        targetEmail: targetEmail,
+      );
+    }
+    if (mounted) Navigator.pop(context);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder(
-      stream: service.callStream(widget.callId),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return const Scaffold(
-            backgroundColor: Colors.black,
-            body: Center(
-              child: Text(
-                'Failed to load call details.',
-                style: TextStyle(color: Colors.white),
-              ),
-            ),
-          );
-        }
-        final data = snapshot.data?.data() as Map<String, dynamic>?;
-        final targetUserId = data == null
-            ? null
-            : (widget.isCaller ? data["receiverId"] : data["callerId"]) as String?;
-        final targetEmail = data == null
-            ? null
-            : (widget.isCaller ? data["receiverEmail"] : data["callerEmail"]) as String?;
-        return Scaffold(
-          backgroundColor: Colors.black,
-          body: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (targetEmail != null)
-                  Text(
-                    targetEmail,
-                    style: const TextStyle(color: Colors.white, fontSize: 20),
-                  ),
-                const SizedBox(height: 24),
-                Row(
+    return WillPopScope(
+      onWillPop: () async {
+        // Prevent accidental back navigation
+        return false;
+      },
+      child: StreamBuilder(
+        stream: service.callStream(widget.callId),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Scaffold(
+              backgroundColor: Colors.black,
+              body: Center(
+                child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    OutlinedButton(
-                      onPressed: _toggleMute,
-                      child: Text(_muted ? "Unmute" : "Mute"),
+                    const Icon(
+                      Icons.error_outline,
+                      color: Colors.white,
+                      size: 64,
                     ),
-                    const SizedBox(width: 12),
-                    ElevatedButton(
-                      onPressed: (targetUserId == null || targetEmail == null || _sendingCallback)
-                          ? null
-                          : () => _showCallbackDialog(
-                                targetUserId: targetUserId,
-                                targetEmail: targetEmail,
-                              ),
-                      child: const Text("Callback"),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Failed to load call details.',
+                      style: TextStyle(color: Colors.white, fontSize: 18),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(height: 24),
                     ElevatedButton(
-                      onPressed: () {
-                        final currentUser = FirebaseAuth.instance.currentUser;
-                        if (currentUser == null || targetUserId == null) {
-                          _showError('Unable to start video call.');
-                          return;
-                        }
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => VideoCallScreen(
-                              callId: widget.callId,
-                              isCaller: widget.isCaller,
-                              callerId: widget.isCaller ? currentUser.uid : targetUserId,
-                              calleeId: widget.isCaller ? targetUserId : currentUser.uid,
-                            ),
-                          ),
-                        );
-                      },
-                      child: const Text("Video"),
-                    ),
-                    const SizedBox(width: 12),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                      onPressed: () async {
-                        if (targetUserId != null && targetEmail != null) {
-                          await _logCall(
-                            status: 'completed',
-                            callType: 'audio',
-                            targetUserId: targetUserId,
-                            targetEmail: targetEmail,
-                          );
-                        }
-                        if (context.mounted) Navigator.pop(context);
-                      },
-                      child: const Text("End Call"),
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Go Back'),
                     ),
                   ],
                 ),
-              ],
+              ),
+            );
+          }
+
+          final data = snapshot.data?.data();
+          final targetUserId = data == null
+              ? null
+              : (widget.isCaller ? data["receiverId"] : data["callerId"]) as String?;
+          final targetEmail = data == null
+              ? null
+              : (widget.isCaller ? data["receiverEmail"] : data["callerEmail"]) as String?;
+
+          return Scaffold(
+            backgroundColor: Colors.black,
+            body: SafeArea(
+              child: Column(
+                children: [
+                  // Header section
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        // User avatar
+                        Container(
+                          width: 100,
+                          height: 100,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.grey.shade800,
+                            border: Border.all(color: Colors.white24, width: 2),
+                          ),
+                          child: Icon(
+                            Icons.person,
+                            size: 50,
+                            color: Colors.grey.shade400,
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        
+                        // User name/email
+                        if (targetEmail != null)
+                          Text(
+                            targetEmail,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        const SizedBox(height: 12),
+                        
+                        // Call status and duration
+                        if (_callReady)
+                          Text(
+                            _callDuration,
+                            style: TextStyle(
+                              color: Colors.grey.shade400,
+                              fontSize: 18,
+                            ),
+                          )
+                        else
+                          Text(
+                            'Connecting...',
+                            style: TextStyle(
+                              color: Colors.grey.shade400,
+                              fontSize: 16,
+                            ),
+                          ),
+                        
+                        // Audio indicator
+                        const SizedBox(height: 32),
+                        if (_callReady)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white10,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  _muted ? Icons.mic_off : Icons.mic,
+                                  color: _muted ? Colors.red : Colors.green,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _muted ? 'Muted' : 'Active',
+                                  style: TextStyle(
+                                    color: _muted ? Colors.red : Colors.green,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  
+                  // Control buttons
+                  Padding(
+                    padding: const EdgeInsets.all(24.0),
+                    child: Column(
+                      children: [
+                        // Top row buttons
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            _buildControlButton(
+                              icon: _muted ? Icons.mic_off : Icons.mic,
+                              label: _muted ? "Unmute" : "Mute",
+                              onPressed: _callReady ? _toggleMute : null,
+                              backgroundColor: _muted ? Colors.red.shade700 : Colors.white24,
+                            ),
+                            _buildControlButton(
+                              icon: Icons.videocam,
+                              label: "Video",
+                              onPressed: (targetUserId == null) ? null : () {
+                                final currentUser = FirebaseAuth.instance.currentUser;
+                                if (currentUser == null) {
+                                  _showError('Unable to start video call.');
+                                  return;
+                                }
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => VideoCallScreen(
+                                      callId: widget.callId,
+                                      isCaller: widget.isCaller,
+                                      callerId: widget.isCaller ? currentUser.uid : targetUserId,
+                                      calleeId: widget.isCaller ? targetUserId : currentUser.uid,
+                                    ),
+                                  ),
+                                );
+                              },
+                              backgroundColor: Colors.white24,
+                            ),
+                            _buildControlButton(
+                              icon: Icons.schedule,
+                              label: _sendingCallback ? "..." : "Callback",
+                              onPressed: (targetUserId == null || targetEmail == null || _sendingCallback)
+                                  ? null
+                                  : () => _showCallbackDialog(
+                                        targetUserId: targetUserId,
+                                        targetEmail: targetEmail,
+                                      ),
+                              backgroundColor: Colors.white24,
+                            ),
+                          ],
+                        ),
+                        
+                        const SizedBox(height: 24),
+                        
+                        // End call button
+                        SizedBox(
+                          width: double.infinity,
+                          height: 56,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red.shade700,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(28),
+                              ),
+                              elevation: 4,
+                            ),
+                            onPressed: _isEnding
+                                ? null
+                                : () => _endCall(targetUserId, targetEmail),
+                            child: _isEnding
+                                ? const SizedBox(
+                                    height: 24,
+                                    width: 24,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(Icons.call_end, size: 28),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        "End Call",
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildControlButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onPressed,
+    required Color backgroundColor,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 64,
+          height: 64,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: onPressed == null ? Colors.grey.shade800 : backgroundColor,
+            boxShadow: onPressed != null
+                ? [
+                    BoxShadow(
+                      color: backgroundColor.withOpacity(0.3),
+                      blurRadius: 8,
+                      spreadRadius: 2,
+                    ),
+                  ]
+                : null,
           ),
-        );
-      },
+          child: IconButton(
+            icon: Icon(icon, size: 28),
+            color: onPressed == null ? Colors.grey.shade600 : Colors.white,
+            onPressed: onPressed,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          label,
+          style: TextStyle(
+            color: onPressed == null ? Colors.grey.shade600 : Colors.white,
+            fontSize: 12,
+          ),
+        ),
+      ],
     );
   }
 }
