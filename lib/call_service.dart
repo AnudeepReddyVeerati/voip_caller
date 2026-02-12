@@ -2,6 +2,7 @@ import 'dart:math';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'app_error.dart';
 
@@ -73,12 +74,12 @@ class CallService {
     return _guardFirestore(() async {
       _requireUser();
       final callId = _generateCallId();
-      
+
       // Validate receiver
       if (receiverId.isEmpty || receiverEmail.isEmpty) {
         throw AppException('Invalid receiver information.');
       }
-      
+
       await _firestore.collection("calls").doc(callId).set({
         "callId": callId,
         "callerId": uid,
@@ -127,12 +128,12 @@ class CallService {
   }) async {
     await _guardFirestore(() async {
       _requireUser();
-      
+
       // Validate inputs
       if (message.trim().isEmpty) {
         throw AppException('Message cannot be empty.');
       }
-      
+
       final now = Timestamp.now();
       final remindAt = Timestamp.fromDate(DateTime.now().add(remindIn));
 
@@ -260,7 +261,10 @@ class CallService {
   Future<void> deleteNotification(String notificationId) async {
     await _guardFirestore(() {
       _requireUser();
-      return _firestore.collection("notifications").doc(notificationId).delete();
+      return _firestore
+          .collection("notifications")
+          .doc(notificationId)
+          .delete();
     });
   }
 
@@ -315,39 +319,63 @@ class WebRTCCall {
     }
   }
 
-  Future<void> start(String callId, bool isCaller) async {
+  Future<void> start(String callId, bool isCaller, {bool video = false}) async {
     try {
+      debugPrint(
+          'WebRTCCall.start: callId=$callId, isCaller=$isCaller, video=$video');
+
       pc = await createPeerConnection(config);
+      debugPrint('PeerConnection created for callId=$callId');
 
       localStream = await navigator.mediaDevices.getUserMedia({
         'audio': true,
-        'video': false,
+        'video': video
+            ? {'facingMode': 'user', 'width': 1280, 'height': 720}
+            : false,
       });
+      debugPrint(
+          'Got local stream: audio=${localStream?.getAudioTracks().length}, video=${localStream?.getVideoTracks().length}');
 
-      if (localStream == null || pc == null) return;
+      if (localStream == null || pc == null) {
+        debugPrint('No localStream or pc is null, aborting callId=$callId');
+        return;
+      }
 
-for (var track in localStream!.getAudioTracks()) {
-  track.enabled = true;
-  await pc!.addTrack(track, localStream!);
-}
+      for (var track in localStream!.getAudioTracks()) {
+        track.enabled = true;
+        await pc!.addTrack(track, localStream!);
+      }
+      if (video) {
+        for (var track in localStream!.getVideoTracks()) {
+          await pc!.addTrack(track, localStream!);
+        }
+      }
 
+      pc!.onTrack = (event) async {
+        debugPrint(
+            'onTrack: kind=${event.track.kind} streams=${event.streams.length}');
+      };
 
-      pc!.onIceCandidate = (candidate) {
+      pc!.onIceGatheringState = (state) {
+        debugPrint('ICE gathering state: $state');
+      };
+
+      pc!.onIceCandidate = (candidate) async {
         if (candidate.candidate != null) {
-          _firestore
-              .collection("calls")
-              .doc(callId)
-              .collection(isCaller ? "callerIce" : "receiverIce")
-              .add(candidate.toMap())
-              .catchError((e) {
-            // Silent fail for ICE candidates
-            print('Failed to add ICE candidate: $e');
-          });
+          try {
+            await _firestore
+                .collection("calls")
+                .doc(callId)
+                .collection(isCaller ? "callerIce" : "receiverIce")
+                .add(candidate.toMap());
+          } catch (e) {
+            debugPrint('Failed to add ICE candidate: $e');
+          }
         }
       };
 
       pc!.onConnectionState = (state) {
-        print('Connection state: $state');
+        debugPrint('Connection state: $state');
         if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
             state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
           // Connection failed or closed
@@ -373,7 +401,7 @@ for (var track in localStream!.getAudioTracks()) {
           if (_appliedAnswer || pc == null) return;
           final data = doc.data();
           if (data == null) return;
-          
+
           final answer = data["answer"];
           if (answer is Map && (answer["sdp"] as String?)?.isNotEmpty == true) {
             _appliedAnswer = true;
@@ -382,7 +410,7 @@ for (var track in localStream!.getAudioTracks()) {
                 RTCSessionDescription(answer["sdp"], answer["type"]),
               );
             } catch (e) {
-              print('Failed to set remote description: $e');
+              debugPrint('Failed to set remote description: $e');
             }
           }
         });
@@ -392,12 +420,12 @@ for (var track in localStream!.getAudioTracks()) {
         final doc = await _guardFirestore(() {
           return _firestore.collection("calls").doc(callId).get();
         });
-        
+
         final data = doc.data();
         if (data == null) {
           throw AppException('Call data not found.');
         }
-        
+
         final offer = data["offer"];
         if (offer == null) {
           throw AppException('Call offer not found.');
@@ -435,7 +463,7 @@ for (var track in localStream!.getAudioTracks()) {
         for (var doc in snapshot.docs) {
           if (_seenIceIds.contains(doc.id) || pc == null) continue;
           _seenIceIds.add(doc.id);
-          
+
           try {
             final data = doc.data();
             pc!.addCandidate(RTCIceCandidate(
@@ -444,26 +472,26 @@ for (var track in localStream!.getAudioTracks()) {
               data["sdpMLineIndex"],
             ));
           } catch (e) {
-            print('Failed to add ICE candidate: $e');
+            debugPrint('Failed to add ICE candidate: $e');
           }
         }
       },
       onError: (e) {
-        print('Error listening to ICE candidates: $e');
+        debugPrint('Error listening to ICE candidates: $e');
       },
     );
   }
 
   void _handleConnectionFailure(String callId) {
     // Handle connection failure
-    print('WebRTC connection failed for call: $callId');
+    debugPrint('WebRTC connection failed for call: $callId');
   }
 
   Future<void> _cleanup() async {
     try {
       await answerSub?.cancel();
       await iceSub?.cancel();
-      
+
       if (localStream != null) {
         for (var track in localStream!.getTracks()) {
           await track.stop();
@@ -471,13 +499,13 @@ for (var track in localStream!.getAudioTracks()) {
         await localStream!.dispose();
         localStream = null;
       }
-      
+
       if (pc != null) {
         await pc!.close();
         pc = null;
       }
     } catch (e) {
-      print('Error during cleanup: $e');
+      debugPrint('Error during cleanup: $e');
     }
   }
 
@@ -487,7 +515,7 @@ for (var track in localStream!.getAudioTracks()) {
 
     try {
       await _cleanup();
-      
+
       await _guardFirestore(() {
         return _firestore.collection("calls").doc(callId).update({
           "status": "ended",
@@ -495,7 +523,7 @@ for (var track in localStream!.getAudioTracks()) {
         });
       });
     } catch (e) {
-      print('Error closing call: $e');
+      debugPrint('Error closing call: $e');
     } finally {
       _isClosing = false;
     }

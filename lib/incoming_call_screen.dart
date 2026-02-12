@@ -233,20 +233,26 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
                     FloatingActionButton(
-                      backgroundColor: Colors.red,
-                      onPressed: _rejectCall,
-                      child: const Icon(Icons.call_end),
-                    ),
-                    FloatingActionButton(
-                      backgroundColor: Colors.green,
-                      onPressed: _acceptCall,
-                      child: const Icon(Icons.call),
-                    ),
-                    FloatingActionButton(
-                      backgroundColor: Colors.orange,
-                      onPressed: _callbackCall,
-                      child: const Icon(Icons.schedule),
-                    ),
+  heroTag: 'incoming_reject_${widget.callId}',
+  backgroundColor: Colors.red,
+  onPressed: _rejectCall,
+  child: const Icon(Icons.call_end),
+),
+
+FloatingActionButton(
+  heroTag: 'incoming_accept_${widget.callId}',
+  backgroundColor: Colors.green,
+  onPressed: _acceptCall,
+  child: const Icon(Icons.call),
+),
+
+FloatingActionButton(
+  heroTag: 'incoming_callback_${widget.callId}',
+  backgroundColor: Colors.orange,
+  onPressed: _callbackCall,
+  child: const Icon(Icons.schedule),
+),
+
                   ],
                 ),
               )

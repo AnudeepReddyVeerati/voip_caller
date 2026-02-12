@@ -12,14 +12,14 @@ class CallLogService {
     try {
       final uid = currentUserId;
       if (uid == null) return [];
-      
+
       final snap = await _firestore
           .collection('call_logs')
           .where('participants', arrayContains: uid)
           .orderBy('callStartTime', descending: true)
           .limit(limit)
           .get();
-      
+
       return snap.docs.map((d) => CallLog.fromDoc(d)).toList();
     } catch (e) {
       print('Error fetching user call logs: $e');
@@ -34,7 +34,7 @@ class CallLogService {
           .orderBy('callStartTime', descending: true)
           .limit(limit)
           .get();
-      
+
       return snap.docs.map((d) => CallLog.fromDoc(d)).toList();
     } catch (e) {
       print('Error fetching all call logs: $e');
@@ -56,24 +56,19 @@ class CallLogService {
     try {
       final uid = currentUserId;
       if (uid == null) return false;
-      
+
       final snap = await _firestore
           .collection('call_logs')
           .where('participants', arrayContains: uid)
           .get();
-      
-      // Use batch for better performance
-    final snapshot = await _firestore.collection("calls").get();
 
-final batch = _firestore.batch();
+      // Use batch for better performance on call_logs only
+      final batch = _firestore.batch();
+      for (final doc in snap.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
 
-for (final doc in snapshot.docs) {
-  batch.delete(doc.reference);
-}
-
-await batch.commit();
-
-      
       return true;
     } catch (e) {
       print('Error clearing call logs: $e');
@@ -99,9 +94,9 @@ await batch.commit();
         print('Error: Invalid user IDs');
         return false;
       }
-      
+
       final durationSeconds = callEndTime.difference(callStartTime).inSeconds;
-      
+
       await _firestore.collection('call_logs').add({
         'callerId': callerId,
         'callerName': callerName,
@@ -117,7 +112,7 @@ await batch.commit();
         'participants': [callerId, receiverId],
         'createdAt': FieldValue.serverTimestamp(), // Use server timestamp
       });
-      
+
       return true;
     } catch (e) {
       print('Error saving call log: $e');
@@ -129,7 +124,7 @@ await batch.commit();
   Stream<List<CallLog>> getUserCallLogsStream({int limit = 50}) {
     final uid = currentUserId;
     if (uid == null) return Stream.value([]);
-    
+
     return _firestore
         .collection('call_logs')
         .where('participants', arrayContains: uid)

@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'call_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/users_screen.dart'; // for UsersScreenEnhanced
 import 'fix_calls.dart';
 import 'app_error.dart';
 
@@ -191,7 +192,8 @@ void _showIncomingCall(DocumentSnapshot<Map<String, dynamic>> doc) {
           }
 
           if (snapshot.hasData && snapshot.data != null) {
-            return const HomeScreen();
+            // Go directly to enhanced contacts/call screen
+            return const UsersScreenEnhanced();
           }
 
           return const LoginScreen();

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'call_service.dart';
 import 'app_error.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -86,13 +85,15 @@ class _CallScreenState extends State<CallScreen> {
 
     Future.microtask(() async {
       try {
+        debugPrint(
+            'CallScreen.initState -> callId=${widget.callId}, isCaller=${widget.isCaller}');
         final permitted = await _ensurePermissions();
         if (!permitted) {
           _showError('Microphone permission is required to start a call.');
           if (mounted) Navigator.pop(context);
           return;
         }
-        await call.start(widget.callId, widget.isCaller);
+        await call.start(widget.callId, widget.isCaller, video: false);
         if (mounted) {
           setState(() => _callReady = true);
           _startCallTimer();
@@ -210,7 +211,7 @@ class _CallScreenState extends State<CallScreen> {
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      value: channel,
+                      initialValue: channel,
                       decoration: InputDecoration(
                         labelText: "Notification Channel",
                         border: OutlineInputBorder(
@@ -219,8 +220,10 @@ class _CallScreenState extends State<CallScreen> {
                         filled: true,
                       ),
                       items: const [
-                        DropdownMenuItem(value: "WhatsApp", child: Text("WhatsApp")),
-                        DropdownMenuItem(value: "Google", child: Text("Google")),
+                        DropdownMenuItem(
+                            value: "WhatsApp", child: Text("WhatsApp")),
+                        DropdownMenuItem(
+                            value: "Google", child: Text("Google")),
                         DropdownMenuItem(value: "Phone", child: Text("Phone")),
                       ],
                       onChanged: (v) {
@@ -231,7 +234,7 @@ class _CallScreenState extends State<CallScreen> {
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<int>(
-                      value: remindMinutes,
+                      initialValue: remindMinutes,
                       decoration: InputDecoration(
                         labelText: "Remind me in",
                         border: OutlineInputBorder(
@@ -317,11 +320,8 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async {
-        // Prevent accidental back navigation
-        return false;
-      },
+    return PopScope(
+      canPop: false,
       child: StreamBuilder(
         stream: service.callStream(widget.callId),
         builder: (context, snapshot) {
@@ -356,10 +356,12 @@ class _CallScreenState extends State<CallScreen> {
           final data = snapshot.data?.data();
           final targetUserId = data == null
               ? null
-              : (widget.isCaller ? data["receiverId"] : data["callerId"]) as String?;
+              : (widget.isCaller ? data["receiverId"] : data["callerId"])
+                  as String?;
           final targetEmail = data == null
               ? null
-              : (widget.isCaller ? data["receiverEmail"] : data["callerEmail"]) as String?;
+              : (widget.isCaller ? data["receiverEmail"] : data["callerEmail"])
+                  as String?;
 
           return Scaffold(
             backgroundColor: Colors.black,
@@ -387,7 +389,7 @@ class _CallScreenState extends State<CallScreen> {
                           ),
                         ),
                         const SizedBox(height: 24),
-                        
+
                         // User name/email
                         if (targetEmail != null)
                           Text(
@@ -399,7 +401,7 @@ class _CallScreenState extends State<CallScreen> {
                             ),
                           ),
                         const SizedBox(height: 12),
-                        
+
                         // Call status and duration
                         if (_callReady)
                           Text(
@@ -417,7 +419,7 @@ class _CallScreenState extends State<CallScreen> {
                               fontSize: 16,
                             ),
                           ),
-                        
+
                         // Audio indicator
                         const SizedBox(height: 32),
                         if (_callReady)
@@ -452,7 +454,7 @@ class _CallScreenState extends State<CallScreen> {
                       ],
                     ),
                   ),
-                  
+
                   // Control buttons
                   Padding(
                     padding: const EdgeInsets.all(24.0),
@@ -466,35 +468,46 @@ class _CallScreenState extends State<CallScreen> {
                               icon: _muted ? Icons.mic_off : Icons.mic,
                               label: _muted ? "Unmute" : "Mute",
                               onPressed: _callReady ? _toggleMute : null,
-                              backgroundColor: _muted ? Colors.red.shade700 : Colors.white24,
+                              backgroundColor:
+                                  _muted ? Colors.red.shade700 : Colors.white24,
                             ),
                             _buildControlButton(
                               icon: Icons.videocam,
                               label: "Video",
-                              onPressed: (targetUserId == null) ? null : () {
-                                final currentUser = FirebaseAuth.instance.currentUser;
-                                if (currentUser == null) {
-                                  _showError('Unable to start video call.');
-                                  return;
-                                }
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => VideoCallScreen(
-                                      callId: widget.callId,
-                                      isCaller: widget.isCaller,
-                                      callerId: widget.isCaller ? currentUser.uid : targetUserId,
-                                      calleeId: widget.isCaller ? targetUserId : currentUser.uid,
-                                    ),
-                                  ),
-                                );
-                              },
+                              onPressed: (targetUserId == null)
+                                  ? null
+                                  : () {
+                                      final currentUser =
+                                          FirebaseAuth.instance.currentUser;
+                                      if (currentUser == null) {
+                                        _showError(
+                                            'Unable to start video call.');
+                                        return;
+                                      }
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => VideoCallScreen(
+                                            callId: widget.callId,
+                                            isCaller: widget.isCaller,
+                                            callerId: widget.isCaller
+                                                ? currentUser.uid
+                                                : targetUserId,
+                                            calleeId: widget.isCaller
+                                                ? targetUserId
+                                                : currentUser.uid,
+                                          ),
+                                        ),
+                                      );
+                                    },
                               backgroundColor: Colors.white24,
                             ),
                             _buildControlButton(
                               icon: Icons.schedule,
                               label: _sendingCallback ? "..." : "Callback",
-                              onPressed: (targetUserId == null || targetEmail == null || _sendingCallback)
+                              onPressed: (targetUserId == null ||
+                                      targetEmail == null ||
+                                      _sendingCallback)
                                   ? null
                                   : () => _showCallbackDialog(
                                         targetUserId: targetUserId,
@@ -504,9 +517,9 @@ class _CallScreenState extends State<CallScreen> {
                             ),
                           ],
                         ),
-                        
+
                         const SizedBox(height: 24),
-                        
+
                         // End call button
                         SizedBox(
                           width: double.infinity,
@@ -577,7 +590,7 @@ class _CallScreenState extends State<CallScreen> {
             boxShadow: onPressed != null
                 ? [
                     BoxShadow(
-                      color: backgroundColor.withOpacity(0.3),
+                      color: backgroundColor.withValues(alpha: 0.3),
                       blurRadius: 8,
                       spreadRadius: 2,
                     ),

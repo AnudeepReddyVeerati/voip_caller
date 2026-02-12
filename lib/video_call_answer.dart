@@ -1,15 +1,14 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'dart:async';
 
-Future<StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>
-    answerCall(
+Future<StreamSubscription<QuerySnapshot<Map<String, dynamic>>>> answerCall(
   String callId,
   RTCPeerConnection pc,
   MediaStream localStream,
 ) async {
-  final callDoc =
-      FirebaseFirestore.instance.collection('video_calls').doc(callId);
+  final callDoc = FirebaseFirestore.instance.collection('calls').doc(callId);
 
   // Add local tracks
   for (final track in localStream.getTracks()) {
@@ -49,44 +48,28 @@ Future<StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>
   });
 
   // Send ICE candidates
-  pc.onIceCandidate = (candidate) {
-    if (candidate == null) return;
-
-    callDoc.update({
-      'iceCandidatesCallee': FieldValue.arrayUnion([
-        {
-          'candidate': candidate.candidate,
-          'sdpMid': candidate.sdpMid,
-          'sdpMLineIndex': candidate.sdpMLineIndex,
-        }
-      ])
-    });
+  pc.onIceCandidate = (candidate) async {
+    if (candidate.candidate == null) return;
+    try {
+      await callDoc.collection('receiverIce').add(candidate.toMap());
+    } catch (e) {
+      debugPrint('Failed to add ICE candidate: $e');
+    }
   };
 
-  int seenRemoteIceCount = 0;
-
-  final sub = callDoc.snapshots().listen((snap) async {
-    final snapData = snap.data();
-    if (snapData == null) return;
-
-    final remoteIce =
-        snapData['iceCandidatesCaller'] as List<dynamic>? ?? [];
-
-    for (var i = seenRemoteIceCount; i < remoteIce.length; i++) {
-      final cand = remoteIce[i];
-
-      if (cand is Map<String, dynamic>) {
-        await pc.addCandidate(
-          RTCIceCandidate(
-            cand['candidate'],
-            cand['sdpMid'],
-            cand['sdpMLineIndex'],
-          ),
-        );
+  final sub = callDoc.collection('callerIce').snapshots().listen((snap) async {
+    for (var doc in snap.docs) {
+      final cand = doc.data();
+      try {
+        await pc.addCandidate(RTCIceCandidate(
+          cand['candidate'],
+          cand['sdpMid'],
+          cand['sdpMLineIndex'],
+        ));
+      } catch (e) {
+        debugPrint('Failed to add ICE candidate: $e');
       }
     }
-
-    seenRemoteIceCount = remoteIce.length;
   });
 
   return sub;

@@ -3,11 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../incoming_call_screen.dart';
-import 'active_call_screen.dart';
+import '../call_service.dart';
+// Enhanced UI will reuse the main WebRTC flow via CallService
 import 'call_history_screen.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../call_screen.dart';
-
 
 class UsersScreenEnhanced extends StatefulWidget {
   const UsersScreenEnhanced({super.key});
@@ -20,9 +20,11 @@ class _UsersScreenEnhancedState extends State<UsersScreenEnhanced> {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _incomingCallSub;
   StreamSubscription<User?>? _authSub;
   final currentUser = FirebaseAuth.instance.currentUser;
+  final CallService _callService = CallService();
   final _searchController = TextEditingController();
   String _searchQuery = '';
   late Stream<List<Map<String, dynamic>>> _usersStream;
+  final Set<String> _processedIncomingCallIds = {};
 
   @override
   void initState() {
@@ -30,103 +32,101 @@ class _UsersScreenEnhancedState extends State<UsersScreenEnhanced> {
     _setupStreams();
     _updateOnlineStatus(true);
   }
+
   @override
   void dispose() {
-  _searchController.dispose();
-  _authSub?.cancel();
-  _incomingCallSub?.cancel();   // <-- ADD THIS LINE
-  _updateOnlineStatus(false);
-  super.dispose();
-}
-
+    _searchController.dispose();
+    _authSub?.cancel();
+    _incomingCallSub?.cancel(); // <-- ADD THIS LINE
+    _updateOnlineStatus(false);
+    super.dispose();
+  }
 
   void _setupStreams() {
     _listenForIncomingCalls();
   }
 
   void _listenForIncomingCalls() {
-  _incomingCallSub?.cancel();
+    _incomingCallSub?.cancel();
 
-  _incomingCallSub = FirebaseFirestore.instance
-      .collection('calls')
-      .where('receiverId', isEqualTo: currentUser?.uid)
-      .where('status', isEqualTo: 'ringing')
-      .snapshots()
-      .listen((QuerySnapshot<Map<String, dynamic>> snapshot) {
+    _incomingCallSub = FirebaseFirestore.instance
+        .collection('calls')
+        .where('receiverId', isEqualTo: currentUser?.uid)
+        .where('status', isEqualTo: 'calling')
+        .snapshots()
+        .listen((QuerySnapshot<Map<String, dynamic>> snapshot) {
+      if (!mounted) return;
 
+      for (final doc in snapshot.docs) {
+        if (_processedIncomingCallIds.contains(doc.id)) continue;
+        _processedIncomingCallIds.add(doc.id);
+
+        final data = doc.data();
+
+        _showIncomingCallDialog(
+          callerId: data['callerId'] ?? '',
+          callerName: data['callerName'] ?? 'Unknown',
+          callerEmail: data['callerEmail'] ?? '',
+          callType: data['callType'] ?? 'audio',
+          callId: doc.id,
+        );
+      }
+    });
+  }
+
+  void _showIncomingCallDialog({
+    required String callerId,
+    required String callerName,
+    required String callerEmail,
+    required String callType,
+    required String callId,
+  }) {
     if (!mounted) return;
 
-    for (final doc in snapshot.docs) {
-      final data = doc.data();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return WillPopScope(
+          onWillPop: () async => false,
+          child: IncomingCallScreen(
+            callerId: callerId,
+            callerName: callerName,
+            callerEmail: callerEmail,
+            callType: callType,
+            callId: callId,
+            onAccept: () async {
+              if (Navigator.of(dialogContext).canPop()) {
+                Navigator.of(dialogContext).pop(); // close dialog
+              }
 
-      _showIncomingCallDialog(
-        callerId: data['callerId'] ?? '',
-        callerName: data['callerName'] ?? 'Unknown',
-        callerEmail: data['callerEmail'] ?? '',
-        callType: data['callType'] ?? 'video',
-        callId: doc.id,
-      );
-    }
-  });
-}
-
-
-
-void _showIncomingCallDialog({
-  required String callerId,
-  required String callerName,
-  required String callerEmail,
-  required String callType,
-  required String callId,
-}) {
-  if (!mounted) return;
-
-  showDialog(
-    context: context,
-    barrierDismissible: false,
-    builder: (dialogContext) {
-      return WillPopScope(
-        onWillPop: () async => false,
-        child: IncomingCallScreen(
-          callerId: callerId,
-          callerName: callerName,
-          callerEmail: callerEmail,
-          callType: callType,
-          callId: callId,
-          onAccept: () async {
-            if (Navigator.of(dialogContext).canPop()) {
-              Navigator.of(dialogContext).pop(); // close dialog
-            }
-
-            await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => CallScreen(
-                  callId: callId,
-                  isCaller: false,
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => CallScreen(
+                    callId: callId,
+                    isCaller: false,
+                  ),
                 ),
-              ),
-            );
-          },
-          onReject: () async {
-            await _rejectCall(callId);
-            if (Navigator.of(dialogContext).canPop()) {
-              Navigator.of(dialogContext).pop();
-            }
-          },
-          onCallback: () async {
-            await _rejectCall(callId);
-            if (Navigator.of(dialogContext).canPop()) {
-              Navigator.of(dialogContext).pop();
-            }
-          },
-        ),
-      );
-    },
-  );
-}
-
-
+              );
+            },
+            onReject: () async {
+              await _rejectCall(callId);
+              if (Navigator.of(dialogContext).canPop()) {
+                Navigator.of(dialogContext).pop();
+              }
+            },
+            onCallback: () async {
+              await _rejectCall(callId);
+              if (Navigator.of(dialogContext).canPop()) {
+                Navigator.of(dialogContext).pop();
+              }
+            },
+          ),
+        );
+      },
+    );
+  }
 
   Future<void> _acceptCall(String callId, String callerId) async {
     try {
@@ -137,10 +137,7 @@ void _showIncomingCallDialog({
 
       if (!mounted) return;
 
-      await FirebaseFirestore.instance
-          .collection('calls')
-          .doc(callId)
-          .update({
+      await FirebaseFirestore.instance.collection('calls').doc(callId).update({
         'status': 'accepted',
         'statusUpdatedAt': FieldValue.serverTimestamp(),
       });
@@ -152,16 +149,9 @@ void _showIncomingCallDialog({
         context,
         MaterialPageRoute(
           fullscreenDialog: true,
-          builder: (context) => ActiveCallScreenEnhanced(
-            otherUserId: callerId,
-            otherUserName: callerDoc['displayName'] ?? 'User',
-            otherUserEmail: callerDoc['email'] ?? '',
-            callType: 'video',
+          builder: (context) => CallScreen(
             callId: callId,
-            onMuteToggle: (isMuted) {},
-            onSpeakerToggle: (isSpeaker) {},
-            onVideoToggle: (isOn) {},
-            onEndCall: () {},
+            isCaller: false,
           ),
         ),
       );
@@ -172,10 +162,7 @@ void _showIncomingCallDialog({
 
   Future<void> _rejectCall(String callId) async {
     try {
-      await FirebaseFirestore.instance
-          .collection('calls')
-          .doc(callId)
-          .update({
+      await FirebaseFirestore.instance.collection('calls').doc(callId).update({
         'status': 'rejected',
         'statusUpdatedAt': FieldValue.serverTimestamp(),
       });
@@ -187,20 +174,17 @@ void _showIncomingCallDialog({
   Future<void> _initiateCall(
     String recipientId,
     String recipientName,
-    String recipientEmail,
-  ) async {
+    String recipientEmail, {
+    String callType = 'video',
+  }) async {
     try {
-      final callDoc = await FirebaseFirestore.instance.collection('calls').add({
-        'callerId': currentUser?.uid,
+      final callId = await _callService.createCall(recipientId, recipientEmail);
+
+      // add some UI-friendly fields to the call doc
+      await FirebaseFirestore.instance.collection('calls').doc(callId).update({
         'callerName': currentUser?.displayName ?? 'User',
-        'callerEmail': currentUser?.email ?? '',
-        'receiverId': recipientId,
         'receiverName': recipientName,
-        'receiverEmail': recipientEmail,
-        'callType': 'video',
-        'status': 'ringing',
-        'createdAt': FieldValue.serverTimestamp(),
-        'statusUpdatedAt': FieldValue.serverTimestamp(),
+        'callType': callType,
       });
 
       if (!mounted) return;
@@ -209,16 +193,9 @@ void _showIncomingCallDialog({
         context,
         MaterialPageRoute(
           fullscreenDialog: true,
-          builder: (context) => ActiveCallScreenEnhanced(
-            otherUserId: recipientId,
-            otherUserName: recipientName,
-            otherUserEmail: recipientEmail,
-            callType: 'video',
-            callId: callDoc.id,
-            onMuteToggle: (isMuted) {},
-            onSpeakerToggle: (isSpeaker) {},
-            onVideoToggle: (isOn) {},
-            onEndCall: () {},
+          builder: (context) => CallScreen(
+            callId: callId,
+            isCaller: true,
           ),
         ),
       );
@@ -251,12 +228,12 @@ void _showIncomingCallDialog({
         .map((snapshot) {
       var users = snapshot.docs
           .map((doc) => {
-            'uid': doc.id,
-            'email': doc['email'] ?? '',
-            'displayName': doc['displayName'] ?? 'User',
-            'isOnline': doc['isOnline'] ?? false,
-            'lastSeen': doc['lastSeen'],
-          })
+                'uid': doc.id,
+                'email': doc['email'] ?? '',
+                'displayName': doc['displayName'] ?? 'User',
+                'isOnline': doc['isOnline'] ?? false,
+                'lastSeen': doc['lastSeen'],
+              })
           .toList();
 
       if (_searchQuery.isNotEmpty) {
@@ -273,7 +250,8 @@ void _showIncomingCallDialog({
             .toList();
       }
 
-      users.sort((a, b) => (b['isOnline'] ? 1 : 0).compareTo(a['isOnline'] ? 1 : 0));
+      users.sort(
+          (a, b) => (b['isOnline'] ? 1 : 0).compareTo(a['isOnline'] ? 1 : 0));
       return users;
     });
   }
@@ -414,7 +392,8 @@ void _showIncomingCallDialog({
                 }
 
                 return ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   itemCount: users.length,
                   itemBuilder: (context, index) {
                     final user = users[index];
@@ -515,6 +494,7 @@ void _showIncomingCallDialog({
                           user['uid'],
                           user['displayName'],
                           user['email'],
+                          callType: 'audio',
                         )
                     : null,
                 tooltip: 'Audio Call',
@@ -527,6 +507,7 @@ void _showIncomingCallDialog({
                           user['uid'],
                           user['displayName'],
                           user['email'],
+                          callType: 'video',
                         )
                     : null,
                 tooltip: 'Video Call',
@@ -534,9 +515,7 @@ void _showIncomingCallDialog({
             ],
           ),
         ),
-        onTap: isOnline
-            ? () => _showUserDetails(user)
-            : null,
+        onTap: isOnline ? () => _showUserDetails(user) : null,
       ),
     );
   }
@@ -642,6 +621,7 @@ void _showIncomingCallDialog({
                         user['uid'],
                         user['displayName'],
                         user['email'],
+                        callType: 'audio',
                       );
                     },
                     icon: const Icon(Icons.call),
@@ -665,6 +645,7 @@ void _showIncomingCallDialog({
                         user['uid'],
                         user['displayName'],
                         user['email'],
+                        callType: 'video',
                       );
                     },
                     icon: const Icon(Icons.videocam),

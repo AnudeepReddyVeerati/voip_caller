@@ -26,7 +26,7 @@ class VideoCallService {
 
   Future<void> startCall() async {
     final callId = const Uuid().v4();
-    callDoc = _firestore.collection('video_calls').doc(callId);
+    callDoc = _firestore.collection('calls').doc(callId);
 
     await callDoc!.set({
       'callId': callId,
@@ -76,7 +76,7 @@ class VideoCallService {
           }
         ])
       });
-        };
+    };
 
     _iceSub = callDoc!.snapshots().listen((snapshot) async {
       final data = snapshot.data();

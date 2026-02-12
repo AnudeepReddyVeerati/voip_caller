@@ -31,12 +31,11 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   MediaStream? _localStream;
   MediaStream? _remoteStream;
 
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _answerSub;
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _iceSub;
+  StreamSubscription? _answerSub;
+  StreamSubscription? _iceSub;
 
   final _firestore = FirebaseFirestore.instance;
   final _callLogService = CallLogService();
-  int _seenRemoteIceCount = 0;
   bool _loggedCall = false;
   bool _appliedAnswer = false;
   late DateTime _callStartTime;
@@ -76,7 +75,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     if (!permitted) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Camera and microphone permissions required.')),
+          const SnackBar(
+              content: Text('Camera and microphone permissions required.')),
         );
         Navigator.pop(context);
       }
@@ -95,12 +95,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     for (final track in _localStream!.getTracks()) {
       _pc!.addTrack(track, _localStream!);
     }
-    // ignore: avoid_print
-    print('Local tracks: ${_localStream!.getTracks().map((t) => t.kind).toList()}');
+    debugPrint(
+        'Local tracks: ${_localStream!.getTracks().map((t) => t.kind).toList()}');
 
     _pc!.onTrack = (event) async {
-      // ignore: avoid_print
-      print('onTrack: kind=${event.track.kind} streams=${event.streams.length}');
+      debugPrint(
+          'onTrack: kind=${event.track.kind} streams=${event.streams.length}');
       if (event.streams.isNotEmpty) {
         _remoteRenderer.srcObject = event.streams[0];
         if (mounted) setState(() {});
@@ -111,55 +111,64 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       _remoteRenderer.srcObject = _remoteStream;
       if (mounted) setState(() {});
     };
-    final callDoc = _firestore.collection('video_calls').doc(widget.callId);
+    final callDoc = _firestore.collection('calls').doc(widget.callId);
     await callDoc.set({
       'callId': widget.callId,
       'callerId': widget.callerId,
       'calleeId': widget.calleeId,
     }, SetOptions(merge: true));
 
-    _pc!.onIceCandidate = (c) {
-      final field = widget.isCaller ? 'iceCandidatesCaller' : 'iceCandidatesCallee';
-      callDoc.update({
-        field: FieldValue.arrayUnion([
-          {
-            'candidate': c.candidate,
-            'sdpMid': c.sdpMid,
-            'sdpMLineIndex': c.sdpMLineIndex,
-          }
-        ])
-      });
+    _pc!.onIceCandidate = (c) async {
+      if (c.candidate == null) return;
+      try {
+        await callDoc
+            .collection(widget.isCaller ? 'callerIce' : 'receiverIce')
+            .add(c.toMap());
+      } catch (e) {
+        debugPrint('Failed to add ICE candidate: $e');
+      }
     };
 
     if (widget.isCaller) {
       final offer = await _pc!.createOffer();
       await _pc!.setLocalDescription(offer);
-      await callDoc.set({
-        'callId': widget.callId,
-        'callerId': widget.callerId,
-        'calleeId': widget.calleeId,
+      await callDoc.update({
         'status': 'calling',
         'createdAt': FieldValue.serverTimestamp(),
-        'iceCandidatesCaller': [],
-        'iceCandidatesCallee': [],
         'offer': {'sdp': offer.sdp, 'type': offer.type},
-        'answer': {'sdp': '', 'type': 'answer'},
-      }, SetOptions(merge: true));
+        'offerCreatedAt': FieldValue.serverTimestamp(),
+      });
 
       _answerSub = callDoc.snapshots().listen((doc) async {
         final data = doc.data();
         if (data == null) return;
         final answer = data['answer'];
         if (answer is Map &&
-            (answer['sdp'] as String).isNotEmpty &&
+            (answer['sdp'] as String?)?.isNotEmpty == true &&
             !_appliedAnswer) {
           _appliedAnswer = true;
-          await _pc!.setRemoteDescription(
-            RTCSessionDescription(answer['sdp'], answer['type']),
-          );
-          await callDoc.update({'status': 'connected'});
+          try {
+            await _pc!.setRemoteDescription(
+              RTCSessionDescription(answer['sdp'], answer['type']),
+            );
+            await callDoc.update({'status': 'connected'});
+          } catch (e) {
+            debugPrint('Failed to set remote description: $e');
+          }
         }
-        _applyRemoteIce(data, isCaller: true);
+      });
+
+      // listen for remote ICE candidates from callee
+      _iceSub = callDoc.collection('receiverIce').snapshots().listen((snap) {
+        for (var d in snap.docs) {
+          final cand = d.data();
+          try {
+            _pc?.addCandidate(RTCIceCandidate(
+                cand['candidate'], cand['sdpMid'], cand['sdpMLineIndex']));
+          } catch (e) {
+            debugPrint('Failed to add ICE candidate: $e');
+          }
+        }
       });
     } else {
       final doc = await callDoc.get();
@@ -168,38 +177,27 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       await _pc!.setRemoteDescription(
         RTCSessionDescription(offer['sdp'], offer['type']),
       );
-
       final answer = await _pc!.createAnswer();
       await _pc!.setLocalDescription(answer);
-      await callDoc.set({
+      await callDoc.update({
         'answer': {'sdp': answer.sdp, 'type': answer.type},
+        'answerCreatedAt': FieldValue.serverTimestamp(),
         'status': 'connected',
-      }, SetOptions(merge: true));
+      });
 
-      _iceSub = callDoc.snapshots().listen((snapshot) {
-        final data = snapshot.data();
-        if (data == null) return;
-        _applyRemoteIce(data, isCaller: false);
+      // listen for remote ICE candidates from caller
+      _iceSub = callDoc.collection('callerIce').snapshots().listen((snap) {
+        for (var d in snap.docs) {
+          final cand = d.data();
+          try {
+            _pc?.addCandidate(RTCIceCandidate(
+                cand['candidate'], cand['sdpMid'], cand['sdpMLineIndex']));
+          } catch (e) {
+            debugPrint('Failed to add ICE candidate: $e');
+          }
+        }
       });
     }
-  }
-
-  void _applyRemoteIce(Map<String, dynamic> data, {required bool isCaller}) {
-    final listKey = isCaller ? 'iceCandidatesCallee' : 'iceCandidatesCaller';
-    final remoteIce = data[listKey] as List<dynamic>? ?? [];
-    for (var i = _seenRemoteIceCount; i < remoteIce.length; i++) {
-      final cand = remoteIce[i];
-      if (cand is Map) {
-        _pc?.addCandidate(
-          RTCIceCandidate(
-            cand['candidate'],
-            cand['sdpMid'],
-            cand['sdpMLineIndex'],
-          ),
-        );
-      }
-    }
-    _seenRemoteIceCount = remoteIce.length;
   }
 
   Future<void> _endCall() async {
@@ -226,10 +224,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     final callerId = isCaller ? currentUser.uid : widget.callerId;
     final receiverId = isCaller ? widget.calleeId : currentUser.uid;
 
-    final callerEmail =
-        isCaller ? (currentUser.email ?? '') : await _getUserEmail(widget.callerId);
-    final receiverEmail =
-        isCaller ? await _getUserEmail(widget.calleeId) : (currentUser.email ?? '');
+    final callerEmail = isCaller
+        ? (currentUser.email ?? '')
+        : await _getUserEmail(widget.callerId);
+    final receiverEmail = isCaller
+        ? await _getUserEmail(widget.calleeId)
+        : (currentUser.email ?? '');
 
     final callerName = callerEmail.isNotEmpty ? callerEmail : callerId;
     final receiverName = receiverEmail.isNotEmpty ? receiverEmail : receiverId;
@@ -281,7 +281,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
               style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
               onPressed: () async {
                 await _logCall(status: 'completed');
-                if (mounted) Navigator.pop(context);
+                if (!mounted) return;
+                Navigator.of(this.context).pop();
               },
               child: const Text('End'),
             ),
