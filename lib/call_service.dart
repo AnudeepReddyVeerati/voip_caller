@@ -307,6 +307,12 @@ class WebRTCCall {
         'username': 'openrelayproject',
         'credential': 'openrelayproject',
       },
+      {
+        // TCP fallback for restrictive networks
+        'urls': 'turn:openrelay.metered.ca:443?transport=tcp',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
     ],
     'iceCandidatePoolSize': 10,
   };
@@ -325,6 +331,13 @@ class WebRTCCall {
           'WebRTCCall.start: callId=$callId, isCaller=$isCaller, video=$video');
 
       pc = await createPeerConnection(config);
+      // Log connection / ICE states for diagnostics
+      pc!.onConnectionState = (state) {
+        debugPrint('WebRTCCall PeerConnection state: $state');
+      };
+      pc!.onIceConnectionState = (state) {
+        debugPrint('WebRTCCall ICE connection state: $state');
+      };
       debugPrint('PeerConnection created for callId=$callId');
 
       localStream = await navigator.mediaDevices.getUserMedia({

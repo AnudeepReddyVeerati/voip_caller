@@ -48,6 +48,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         'username': 'openrelayproject',
         'credential': 'openrelayproject',
       },
+      {
+        // Try TCP transport for networks that block UDP
+        'urls': 'turn:openrelay.metered.ca:443?transport=tcp',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
     ]
   };
 
@@ -84,6 +90,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     }
 
     _pc = await createPeerConnection(_config);
+
+    // Log connection / ICE states for easier debugging across networks
+    _pc!.onConnectionState = (state) {
+      debugPrint('PeerConnection state: $state');
+    };
+    _pc!.onIceConnectionState = (state) {
+      debugPrint('ICE connection state: $state');
+    };
 
     _localStream = await navigator.mediaDevices.getUserMedia({
       'audio': true,
