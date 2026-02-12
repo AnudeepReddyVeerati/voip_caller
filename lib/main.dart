@@ -6,7 +6,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'call_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
-import 'screens/users_screen.dart'; // for UsersScreenEnhanced
 import 'fix_calls.dart';
 import 'app_error.dart';
 
@@ -115,46 +114,44 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         .where('status', whereIn: ['calling', 'incoming'])
         .snapshots()
         .listen(
-      (snapshot) {
-        for (var change in snapshot.docChanges) {
-          if (change.type != DocumentChangeType.added) continue;
+          (snapshot) {
+            for (var change in snapshot.docChanges) {
+              if (change.type != DocumentChangeType.added) continue;
 
-          final doc = change.doc;
-          final callId = doc.id;
+              final doc = change.doc;
+              final callId = doc.id;
 
-          if (_processedCallIds.contains(callId)) continue;
-          _processedCallIds.add(callId);
+              if (_processedCallIds.contains(callId)) continue;
+              _processedCallIds.add(callId);
 
-          if (!_isInForeground) continue;
+              if (!_isInForeground) continue;
 
-          final data = doc.data();
+              final data = doc.data();
 
-          if (data == null) continue;
+              if (data == null) continue;
 
-          final status = data['status'] as String?;
-          if (status != 'calling' && status != 'incoming') continue;
+              final status = data['status'] as String?;
+              if (status != 'calling' && status != 'incoming') continue;
 
-          _showIncomingCall(doc);
-        }
+              _showIncomingCall(doc);
+            }
 
-        final activeCallIds = snapshot.docs.map((d) => d.id).toSet();
-        _processedCallIds.retainWhere((id) => activeCallIds.contains(id));
-      },
-      onError: (error) {
-        debugPrint('Incoming call listener error: $error');
-      },
-      cancelOnError: false,
-    );
+            final activeCallIds = snapshot.docs.map((d) => d.id).toSet();
+            _processedCallIds.retainWhere((id) => activeCallIds.contains(id));
+          },
+          onError: (error) {
+            debugPrint('Incoming call listener error: $error');
+          },
+          cancelOnError: false,
+        );
   }
 
-void _showIncomingCall(DocumentSnapshot<Map<String, dynamic>> doc) {
-  if (!mounted) return;
+  void _showIncomingCall(DocumentSnapshot<Map<String, dynamic>> doc) {
+    if (!mounted) return;
 
-  // Do nothing here.
-  // UsersScreen will handle incoming calls.
-}
-
-
+    // Do nothing here.
+    // UsersScreen will handle incoming calls.
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -192,8 +189,7 @@ void _showIncomingCall(DocumentSnapshot<Map<String, dynamic>> doc) {
           }
 
           if (snapshot.hasData && snapshot.data != null) {
-            // Go directly to enhanced contacts/call screen
-            return const UsersScreenEnhanced();
+            return const HomeScreen();
           }
 
           return const LoginScreen();
